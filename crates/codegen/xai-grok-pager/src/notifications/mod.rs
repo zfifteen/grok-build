@@ -481,11 +481,7 @@ mod tests {
         });
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: if cfg!(feature = "powergrok") {
-                product_name().to_string()
-            } else {
-                "Grok".to_string()
-            }.into(),
+            title: product_name().to_string().into(),
             body: "Turn complete".into(),
             session_id: Some("test-session".into()),
         });
@@ -500,11 +496,7 @@ mod tests {
         });
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::SessionReady,
-            title: if cfg!(feature = "powergrok") {
-                product_name().to_string()
-            } else {
-                "Grok".to_string()
-            }.into(),
+            title: product_name().to_string().into(),
             body: "Session ready".into(),
             session_id: None,
         });
@@ -761,11 +753,7 @@ mod tests {
         // crash regardless of suppression state.
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: if cfg!(feature = "powergrok") {
-                product_name().to_string()
-            } else {
-                "Grok".to_string()
-            }.into(),
+            title: product_name().to_string().into(),
             body: "Done".into(),
             session_id: None,
         });

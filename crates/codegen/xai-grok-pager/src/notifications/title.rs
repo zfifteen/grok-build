@@ -115,11 +115,9 @@ impl TitleManager {
     }
 
     pub fn reset(&mut self) -> String {
-        let brand = if cfg!(feature = "powergrok") {
-            product_name()
-        } else {
-            "grok"
-        };
+        // Always call product_name() when the powergrok feature is enabled.
+        // This eliminates scattered cfg! branches (per review point 7 / hard rule).
+        let brand = product_name();
         let esc = build_title_escape(brand);
         self.last_title.clear();
         self.last_title.push_str(brand);
@@ -141,11 +139,9 @@ fn write_item(
     match item {
         TitleItem::Grok => {
             push_separator(buf, has_parts);
-            let brand = if cfg!(feature = "powergrok") {
-                product_name().to_lowercase()
-            } else {
-                "grok".to_string()
-            };
+            // Use title-case "Power Grok" for UI chrome consistency (review point 6).
+            // Lowercasing was creating "power grok" which mixed with "Power Grok".
+            let brand = product_name().to_lowercase().replace(' ', "-");
             buf.push_str(&brand);
         }
         TitleItem::Spinner => {

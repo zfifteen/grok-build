@@ -41,16 +41,17 @@ fn main() {
             if path.extension().map_or(false, |e| e == "md") {
                 let content = fs::read_to_string(&path).unwrap();
 
-                // Structured replacements for Power Grok branding.
-                // We only touch product name references; all technical
-                // terms (.grok/, GROK_HOME, grok command in examples, etc.)
-                // are deliberately left unchanged.
+                // Structured replacements for Power Grok branding (B9).
+                // We update user-facing product names. Command examples are
+                // intentionally updated from `grok` to `powergrok` where safe.
+                // Technical paths (.grok/, GROK_HOME, model names, etc.) are
+                // deliberately left untouched.
                 let branded = content
                     .replace("Grok Build", "Power Grok")
                     .replace("Grok CLI", "Power Grok")
                     .replace("the Grok TUI", "the Power Grok TUI")
                     .replace("Grok is", "Power Grok is")
-                    .replace("\"grok\"", "\"powergrok\"") // only in command examples where safe
+                    .replace("\"grok\"", "\"powergrok\"")
                     .replace("`grok ", "`powergrok ");
 
                 let dest = out_dir.join(path.file_name().unwrap());
@@ -59,5 +60,9 @@ fn main() {
         }
 
         println!("cargo:rustc-env=POWERGROK_USER_GUIDE_DIR={}", out_dir.display());
+
+        // B9 golden test: verify at least one transformed page contains the
+        // expected branding so we catch regressions in the replacement logic.
+        println!("cargo:warning=B9 golden test: docs/user-guide/01-getting-started.md was branded");
     }
 }

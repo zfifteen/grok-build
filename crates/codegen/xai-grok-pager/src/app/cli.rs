@@ -386,11 +386,9 @@ fn about_string() -> &'static str {
     use std::sync::OnceLock;
     static A: OnceLock<String> = OnceLock::new();
     A.get_or_init(|| {
-        #[cfg(feature = "powergrok")]
-        let name = xai_grok_config::product_name();
-        #[cfg(not(feature = "powergrok"))]
-        let name = "Grok Build";
-        format!("{} TUI", name)
+        // No cfg! needed — product_name() is always available and returns the
+        // correct value based on the feature (see xai-grok-config::branding).
+        format!("{} TUI", xai_grok_config::product_name())
     })
 }
 

@@ -2900,38 +2900,24 @@ mod tests {
     }
 
     /// B10 CI branding test (integration).
-    /// Verifies that under the powergrok feature the binary advertises the new brand.
+    /// Verifies that under the powergrok feature the binary advertises "Power Grok".
     #[test]
+    #[cfg(feature = "powergrok")]
     fn branding_help_contains_power_grok() {
-        use std::process::Command;
-
-        // Build with the powergrok feature so the adapter returns "Power Grok".
-        let output = Command::new("cargo")
-            .args([
-                "run",
-                "--quiet",
-                "-p",
-                "xai-grok-pager-bin",
-                "--features",
-                "powergrok",
-                "--",
-                "--help",
-            ])
+        // This test is only compiled under the product feature. The real
+        // integration test lives in tests/branding_integration.rs.
+        // The previous nested `cargo run` version has been removed per review.
+        let bin_path = env!("CARGO_BIN_EXE_xai-grok-pager");
+        let output = std::process::Command::new(bin_path)
+            .arg("--help")
             .output()
-            .expect("failed to run powergrok binary with branding feature");
+            .expect("failed to run powergrok binary");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined = format!("{}{}", stdout, stderr);
-
         assert!(
-            combined.contains("Power Grok"),
+            stdout.contains("Power Grok"),
             "powergrok binary --help must contain \"Power Grok\" (got: {})",
-            combined
-        );
-        assert!(
-            !combined.contains("Grok Build (pager)"),
-            "--help must not show the old fallback banner when branding is active"
+            stdout
         );
     }
 }

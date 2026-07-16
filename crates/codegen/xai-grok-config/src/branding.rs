@@ -1,11 +1,16 @@
 //! Power Grok branding adapter (behind the `powergrok` feature flag).
 //!
-//! This module provides the canonical source of truth for product name and
-//! branding state. It respects the `POWERGROK_BRANDING=1` environment variable
-//! set by the install wrapper (primary signal) and falls back to compile-time
-//! feature detection. No inline `is_powergrok()` or primary `argv0` checks are
-//! allowed in core TUI/CLI paths — all branding decisions must route through
-//! this adapter (per BRANDING_PLAN.md Hard rule and B8).
+//! When the `powergrok` feature is enabled, `product_name()` returns "Power Grok"
+//! and `is_powergrok_branding()` returns `true`. This matches the product build
+//! used by the Power Grok wrapper and CI (Model A from Hermes review).
+//!
+//! The `POWERGROK_BRANDING=1` environment variable is still supported for
+//! testing and non-feature builds. `OnceLock` means the decision is frozen for
+//! the lifetime of the process (first observation wins).
+//!
+//! No inline `is_powergrok()` or primary `argv0` checks are allowed in core
+//! TUI/CLI paths — all branding must route through this adapter (per
+//! BRANDING_PLAN.md Hard rule and B8).
 
 use std::sync::OnceLock;
 
@@ -23,19 +28,20 @@ pub fn product_name() -> &'static str {
 
 /// Returns whether Power Grok branding is active for this process.
 ///
-/// Primary signal: `POWERGROK_BRANDING=1` environment variable (set by wrapper).
-/// Secondary: compile-time `powergrok` feature flag (for builds that always
-/// want Power Grok behavior).
+/// When the `powergrok` feature is enabled this returns `true` (Model A).
+/// `POWERGROK_BRANDING=1` can still force branding in non-feature builds.
 pub fn is_powergrok_branding() -> bool {
     static POWERGROK_BRANDING: OnceLock<bool> = OnceLock::new();
 
     *POWERGROK_BRANDING.get_or_init(|| {
-        // Primary: env var set by install wrapper (shell-agnostic, reliable).
+        // POWERGROK_BRANDING=1 can force branding (useful for testing).
         if std::env::var_os("POWERGROK_BRANDING").is_some_and(|v| v == "1") {
             return true;
         }
 
-        // Secondary: compile-time feature (for powergrok feature-enabled builds).
+        // When the powergrok feature is enabled, we always brand as Power Grok.
+        // This is the model chosen after Hermes review (simpler, matches product
+        // build profile, removes contradictory fallback path).
         cfg!(feature = "powergrok")
     })
 }
@@ -46,24 +52,18 @@ mod tests {
     use serial_test::serial;
 
     #[test]
+    #[cfg(not(feature = "powergrok"))]
     fn test_product_name_fallback() {
-        // When neither env var nor feature is active, we must fall back to upstream name.
-        // This test is skipped under the powergrok feature (the other test covers it).
-        #[cfg(not(feature = "powergrok"))]
-        {
-            let name = product_name();
-            assert_eq!(name, "Grok Build");
-        }
-        #[cfg(feature = "powergrok")]
-        {
-            // Under powergrok feature the fallback test is superseded by test_product_name_with_feature_flag.
-        }
+        // Only compiled in non-powergrok builds. When the feature is enabled we
+        // always return "Power Grok" (Model A).
+        let name = product_name();
+        assert_eq!(name, "Grok Build");
     }
 
     #[test]
     #[serial] // Env var test must not run concurrently with other tests that set it.
     fn test_product_name_with_env_var() {
-        // Primary signal from install wrapper.
+        // POWERGROK_BRANDING=1 forces branding even in non-feature builds.
         unsafe {
             std::env::set_var("POWERGROK_BRANDING", "1");
         }

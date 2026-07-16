@@ -5,7 +5,8 @@ use std::process::Command;
 fn test_powergrok_branding_help() {
     let bin_path = env!("CARGO_BIN_EXE_xai-grok-pager");
     
-    // Set POWERGROK_BRANDING=1 as the primary signal
+    // Under powergrok feature we always brand (Model A). The env var is
+    // still respected for non-feature builds.
     let output = Command::new(bin_path)
         .arg("--help")
         .env("POWERGROK_BRANDING", "1")
@@ -23,10 +24,12 @@ fn test_powergrok_branding_help() {
 }
 
 #[test]
+#[cfg(not(feature = "powergrok"))]
 fn test_default_branding_help() {
     let bin_path = env!("CARGO_BIN_EXE_xai-grok-pager");
     
-    // When POWERGROK_BRANDING is not set, we should see Grok Build (fallback)
+    // Only runs in non-powergrok builds. Under the product profile
+    // (--features powergrok) we always expect "Power Grok" (Model A).
     let output = Command::new(bin_path)
         .arg("--help")
         .env_remove("POWERGROK_BRANDING")
@@ -35,7 +38,6 @@ fn test_default_branding_help() {
         
     let stdout = String::from_utf8_lossy(&output.stdout);
     
-    // Smoke test for fallback path (should pass immediately)
     assert!(
         stdout.contains("Grok Build"),
         "Expected 'Grok Build' in help output, but got: {}",
