@@ -380,11 +380,25 @@ fn version_with_channel() -> &'static str {
         xai_grok_version::display_version_with_commit(env!("VERSION_WITH_COMMIT"), label)
     })
 }
+
+/// Return the about string with dynamic branding for `--help` output.
+fn about_string() -> &'static str {
+    use std::sync::OnceLock;
+    static A: OnceLock<String> = OnceLock::new();
+    A.get_or_init(|| {
+        #[cfg(feature = "powergrok")]
+        let name = xai_grok_config::product_name();
+        #[cfg(not(feature = "powergrok"))]
+        let name = "Grok Build";
+        format!("{} TUI", name)
+    })
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "grok",
     version = version_with_channel(),
-    about = "Grok Build TUI",
+    about = about_string(),
     disable_version_flag = true,
     next_display_order = None,
     help_template = "\
