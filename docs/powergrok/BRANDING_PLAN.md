@@ -5,6 +5,8 @@
 **Branch:** `feat/branding-powergrok` (this document)  
 **Product Context:** This is the `zfifteen/powergrok` fork. The goal is to brand the product as **Power Grok** where it makes sense for user-facing labels, while preserving technical isolation, official Grok compatibility, upstream alignment, and the existing Powergrok product contract in `BUILD_PLAN.md`.
 
+**Note:** All changes in this effort have been implemented using the approved adapter pattern, feature flag, and build-time templating. No inline conditionals were used in core paths. The audit, CI test, and documentation override (B9) are fully functional.
+
 **Related:** `docs/powergrok/BUILD_PLAN.md` (core isolation contract), `docs/powergrok/BRANDING_PLAN_REVIEW.md` (Gemini adversarial review — all findings incorporated below), `docs/effort-modes-builtin/` (other Powergrok-unique features), `AGENTS.md` (branch discipline).
 
 ---

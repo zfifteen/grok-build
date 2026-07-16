@@ -91,7 +91,7 @@ Product should mirror **mental model** (4 vs 16 depth), not server multi-agent A
 
 | Date | Decision | Owner |
 |------|----------|-------|
-| 2026-07-15 | Open builtin program; Phase 1 docs in product repo | Principal + Grok |
+| 2026-07-15 | Open builtin program; Phase 1 docs in product repo | Principal + Grok (technical upstream reference) |
 | 2026-07-15 | **Q1 = A Persist** — override Spec 10 decision 16 for EffortMode resume; mirror plan_mode.json | Principal (via PR review address) + Grok |
 | 2026-07-15 | Hard-stop `continue` = exactly one extra replace wave (tech spec §4.4) | Grok (Hermes freeze item) |
 | 2026-07-15 | Feature flag off must **unregister** builtin names (not only idle runtime) | Grok (Hermes freeze item) |
