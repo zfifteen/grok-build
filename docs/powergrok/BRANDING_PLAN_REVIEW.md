@@ -1,46 +1,40 @@
-# Adversarial Review: Powergrok Branding Plan (`BRANDING_PLAN.md`)
+# Adversarial Review: Powergrok Branding Plan (`BRANDING_PLAN.md`) - Round 2
 
 **Date:** 2026-07-16
 **Reviewer:** Antigravity Agent
 **Status:** Completed
 **Target:** `docs/powergrok/BRANDING_PLAN.md`
 
-This document outlines potential flaws, unaddressed risks, and edge cases found in the current "Power Grok" Branding Plan. The goal of this review is to stress-test the plan against the reality of maintaining a continuous fork of an active upstream repository.
+The plan has successfully incorporated the structural and strategic findings from the previous review (such as adopting feature flags, env vars, CI automation, and a strict style guide). 
+
+However, this Round 2 review identifies **internal inconsistencies and leftover text** from the original draft that contradict the newly added rules. These remnants will cause developer confusion during implementation if not cleaned up.
 
 ---
 
-## 1. The "Conditional UI" Fallacy (Merge Conflict Debt)
-**Reference:** Section 5.1 & Risk 166
+## 1. Contradictory Instructions in Section 7 (Audit Plan)
+**Reference:** Section 7 (Categorize every hit)
+The newly established "Hard rule (post-Gemini)" explicitly prohibits inline `if is_powergrok()` conditionals. However, Section 7 still instructs developers to categorize string hits as:
+> "Conditional → guarded by `is_powergrok()` or argv0 check"
+* **The Risk:** A developer following the Phase 1 audit instructions will start writing the exact inline conditionals that the new architectural rules forbid. 
+* **Recommendation:** Update this categorization step to reflect the new feature flag / adapter pattern. (e.g., "Conditional → extracted to a branding adapter guarded by `#[cfg(feature="powergrok")]`").
 
-The plan assumes that guarding changes with `if is_powergrok()` minimizes upstream drift risk (rated "Low"). However, injecting conditionals directly into upstream TUI rendering logic, `clap` CLI builder definitions, and string formatters fundamentally requires modifying core upstream files. 
+## 2. Outdated Scope Definitions
+**Reference:** Section 4 (In Scope)
+The "In Scope" section states:
+> "Any "Grok" in user-facing strings inside Powergrok-specific code paths (guarded by argv0 or `GROK_HOME`)."
+* **The Risk:** This ignores the newly added `B8` decision which mandates using `POWERGROK_BRANDING=1` and feature flags, stating that `argv0` is "supplementary only."
+* **Recommendation:** Change this bullet point to refer to the new `POWERGROK_BRANDING` env var and compile-time flags rather than `argv0`.
 
-* **The Risk:** Every time upstream refactors the TUI layout, updates dependencies, or modifies CLI arguments, the `if is_powergrok()` conditional patches will cause merge conflicts during the `main -> powergrok` sync.
-* **Recommendation:** Instead of inline conditionals, explore a compile-time feature flag (e.g., `#[cfg(feature = "powergrok")]`) to strip out branching logic at runtime, or enforce a strict adapter pattern where upstream UI components are wrapped rather than modified internally.
+## 3. Stale Mitigations in the Risk Table
+**Reference:** Section 9 (Risks & Mitigations)
+The risk table was not updated to reflect the new, stronger mitigations introduced in Section 0.
+* **The Risk:** 
+  * For **"Over-branding official paths"**, the mitigation still relies solely on "Strict allowlist + PR review gate", completely ignoring the new B10 requirement for an automated CI test.
+  * For **"Upstream drift"**, the mitigation does not mention the `powergrok` feature flag or the adapter pattern, which are the actual technical solutions preventing merge-conflict debt.
+* **Recommendation:** Update the mitigations column to prominently feature the CI test (B10) and feature flags/adapters (B8).
 
-## 2. Fragility of `argv0` for Branding State
-**Reference:** Section 5.1 & B2
-
-The plan relies on `argv0` (the invoked command name) being exactly `powergrok` to toggle the branding state. 
-* **The Risk:** If a user invokes the binary through an alias, a symlink with a different name, a wrapper script that uses absolute paths differently, or via `cargo run --bin powergrok`, the `argv0` check may fail. This would result in the tool executing in `.powergrok` isolation but visually reverting to "Grok Build" branding, causing severe user confusion.
-* **Recommendation:** Do not rely solely on `argv0` for the branding toggle. Consider a dedicated environment variable set by the install wrapper (e.g., `POWERGROK_BRANDING=1`) or a compile-time constant baked into the specific build artifact.
-
-## 3. Lack of Automated Regression Testing (The CI Gap)
-**Reference:** Section 7 (Audit Plan) & Section 8
-
-The plan relies heavily on a manual Phase 1 gate using `rg` (ripgrep) to audit and allowlist strings.
-* **The Risk:** Upstream `main` is a moving target. As new features, TUI views, and documentation are merged from upstream, new instances of "Grok Build" will inevitably bleed into the `powergrok` branch. A one-time manual audit will rot immediately after the first upstream sync.
-* **Recommendation:** The Phase 1 gate must output an automated CI check. Implement a test suite that programmatically invokes the binary and asserts that outputs like `--help` and basic TUI renders contain "Power Grok" and do not contain unauthorized instances of "Grok Build".
-
-## 4. Documentation Strategy is Under-Specified
-**Reference:** Section 4 (Out of Scope / Preserve) & Section 5
-
-The plan dictates "Never edit core upstream user-guide files" while simultaneously requiring "Update documentation" and referencing the brand in the TUI help viewer. 
-* **The Risk:** How will the in-app help viewer display "Power Grok" if the underlying markdown files are strictly preserved upstream? If the plan is to perform on-the-fly string replacement at runtime when reading the files, this is error-prone (it might break markdown links or code blocks). If the plan is to duplicate the documentation for Powergrok, it creates a massive maintenance burden to keep them synced with upstream features.
-* **Recommendation:** Explicitly define the technical mechanism for overriding or patching documentation strings. Runtime regex replacement is risky; prefer template variables in docs if upstream supports it, or maintain a structured diff/patch file applied at build time.
-
-## 5. Inconsistent Prose Terminology
-**Reference:** B1 vs Document Prose
-
-Decision B1 enforces **"Power Grok"** (two words) as the primary product name in prose. However, the plan itself frequently uses **"Powergrok"** as a proper noun when referring to the product or project (e.g., "Powergrok product identity", "Powergrok-specific files", "Powergrok branding plan").
-* **The Risk:** Muddying the distinction between the brand ("Power Grok") and the project/repository/code-identifiers ("powergrok") will lead to inconsistent documentation and developer confusion over time.
-* **Recommendation:** Enforce a strict style guide for developers writing documentation: "Power Grok" is the application the user interacts with. "powergrok" is the binary and branch name. Refactor the `BRANDING_PLAN.md` itself to perfectly adhere to this rule to set the standard.
+## 4. Missing CI Implementation in Phases
+**Reference:** Section 6 (Implementation Phases)
+While `B10` introduces a strict requirement for a CI gate, this requirement is missing from the actual work breakdown.
+* **The Risk:** The CI test might be forgotten or deferred if it is not an explicit deliverable. 
+* **Recommendation:** Add the creation of the CI test to the Exit Criteria of either Phase 1 or Phase 4. The current Phase 1 exit criteria only mention the `rg` audit.
