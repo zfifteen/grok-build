@@ -33,6 +33,9 @@ core-foundation = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
+# Enables Power Grok branding, isolation overrides, and adapter helpers.
+# Activated via the composition-root binary and install wrapper.
+powergrok = []
 
 [lints]
 workspace = true

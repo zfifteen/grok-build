@@ -252,3 +252,5 @@ default-bazel = [
 jemalloc = []
 sandbox-enforce = ["xai-grok-sandbox/enforce"]
 release-dist = []
+# Forward Power Grok branding feature to enable adapter and conditional UI.
+powergrok = ["xai-grok-config/powergrok"]

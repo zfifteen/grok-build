@@ -49,6 +49,12 @@ pub use paths::{
     default_grok_home, encode_cwd_dirname, ensure_sessions_cwd_dir, grok_application, grok_home,
     sessions_cwd_dir, system_config_dir, user_grok_home,
 };
+
+#[cfg(feature = "powergrok")]
+pub mod branding;
+#[cfg(feature = "powergrok")]
+pub use branding::{is_powergrok_branding, product_name};
+
 pub use validation::{
     RequirementsError, RequirementsLayer, RequirementsSource, fail_closed_flag_from_str,
     load_merged_requirements, requirements_layers, validate_requirements,
