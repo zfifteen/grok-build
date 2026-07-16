@@ -78,7 +78,7 @@ This is **not** a full fork rename (we remain a source-built variant of upstream
 - `docs/effort-modes-builtin/*` references to "Grok Build".
 - Welcome / first-run messages under `~/.powergrok`.
 - Error messages that mention the product.
-- Any "Grok" in user-facing strings inside Powergrok-specific code paths (guarded by argv0 or `GROK_HOME`).
+- Any "Grok" in user-facing strings inside Powergrok-specific code paths (guarded by the `powergrok` feature flag or `POWERGROK_BRANDING=1` env var per B8; `argv0` is supplementary only).
 
 ### Out of Scope / Preserve (Allowlist)
 - All `.grok` path literals and logic (handled by existing `project_config_dirname()`).
@@ -88,7 +88,14 @@ This is **not** a full fork rename (we remain a source-built variant of upstream
 - Any string inside the official binary that would affect `grok` command.
 - Third-party notices, licenses, or xAI/SpaceXAI logos (unless adding Power Grok badge).
 
-**Phase 1 gate (strengthened per review):** Exhaustive `rg` audit of `"Grok"`, `"Grok Build"`, `grok` (case-sensitive where UI) with documented **allowlist** of untouched references (similar to BUILD_PLAN G3). **This audit must produce an automated CI test** that runs on every build/PR (asserts "Power Grok" appears in `--help`, TUI header, effort chrome, and that unauthorized "Grok Build" strings are absent under Powergrok branding). One-time manual audit is insufficient (review point 3).
+**Phase 1 gate (strengthened per both reviews):** Exhaustive `rg` audit of `"Grok"`, `"Grok Build"`, `grok` (case-sensitive where UI) with documented **allowlist** of untouched references (similar to BUILD_PLAN G3). 
+
+**Categorization rules (updated per Round 2):** 
+- **Update** → "Power Grok"
+- **Preserve** → technical/official/upstream (add to allowlist with justification)
+- **Conditional** → extracted to a branding adapter guarded by the `powergrok` feature flag or `POWERGROK_BRANDING=1` env var (never inline `is_powergrok()` or primary `argv0` checks in core paths — see Hard rule and B8).
+
+This audit **must produce** an automated CI test (B10) that runs on every build/PR (asserts "Power Grok" in `--help`, TUI header, effort chrome, etc.). One-time manual audit is insufficient.
 
 ---
 
@@ -121,11 +128,11 @@ Update `docs/effort-modes-builtin/` and any TUI chrome to say "Power Grok Expert
 
 | Phase | Branch | Deliverable | Exit Criteria |
 |-------|--------|-------------|---------------|
-| **0 — Plan** | `feat/branding-powergrok` (current) | This `BRANDING_PLAN.md` + audit | Principal review; allowlist complete |
-| **1 — Audit & Strings** | same | Exhaustive `rg` + updates to docs, help text, READMEs, wrapper | No broken links; all user-visible Powergrok strings updated |
-| **2 — TUI & Runtime** | same or stacked | Branding helpers, chrome updates, conditional prompts | TUI shows "Power Grok"; effort modes reference new brand |
-| **3 — Polish & Docs** | same | User guide additions, install script notes, changelog | New users see consistent "Power Grok" identity |
-| **4 — Verification** | same | Build, test, side-by-side with official `grok` | V1–Vn matrix passes; no regression on official paths |
+| **0 — Plan** | `feat/branding-powergrok` (current) | This `BRANDING_PLAN.md` + audit | Principal review; allowlist complete; all contradictions with B8–B10 resolved |
+| **1 — Audit & Strings** | same | Exhaustive `rg` audit (updated categorization) + updates to docs, help text, READMEs, wrapper + **output automated CI test** (B10) | No broken links; all user-visible Powergrok strings updated; CI test passing |
+| **2 — TUI & Runtime** | same or stacked | Branding helpers (feature-flag guarded), chrome updates, adapter-based prompts | TUI shows "Power Grok"; effort modes reference new brand; no inline conditionals in core paths |
+| **3 — Polish & Docs** | same | User guide overrides (B9), install script notes (wrapper env var), changelog, style guide enforcement | New users see consistent "Power Grok" identity |
+| **4 — Verification** | same | Build, test, side-by-side with official `grok`, CI branding test | V1–Vn matrix passes; no regression on official paths; automated test enforces branding |
 
 **Branching note (per AGENTS.md):** Work on `feat/branding-powergrok` → PR into `powergrok`. Do not land on `main`.
 
@@ -170,11 +177,11 @@ Plus full `cargo test`, `cargo check -p xai-grok-pager-bin`, and manual TUI smok
 
 | Risk | Likelihood | Mitigation |
 |------|------------|------------|
-| Over-branding official paths | High | Strict allowlist + PR review gate (audit doc required) |
+| Over-branding official paths | High | Strict allowlist + **automated CI test (B10)** + adapter pattern (B8) + PR review gate |
 | Breaking isolation logic | Medium | All `.grok`/`.powergrok` changes reviewed against BUILD_PLAN |
-| Inconsistent casing | Medium | Central brand helper + style guide in plan |
-| Upstream drift | Low | Keep changes in Powergrok-specific modules; merge main → powergrok regularly |
-| User confusion | Low | Clear "Power Grok is a side-by-side variant of Grok Build" everywhere |
+| Inconsistent casing / style | Medium | Strict style guide (B10) enforced in plan, docs, and CI |
+| Upstream drift / merge conflicts | Low | `powergrok` feature flag + isolated adapters (B8); no inline conditionals in core upstream files |
+| User confusion | Low | Mandatory coexistence language + clear "Power Grok — parallel install of Grok Build" everywhere |
 
 ---
 
