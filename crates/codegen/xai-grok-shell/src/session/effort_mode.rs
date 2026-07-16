@@ -800,6 +800,108 @@ impl EffortModeTracker {
                 && matches!(r.status, SpecialistStatus::Pending)
         })
     }
+
+    /// Snapshot fields for TUI chrome (mode pill + S of N + Partial/Waived).
+    pub fn chrome_state(&self) -> EffortChromeState {
+        EffortChromeState {
+            mode: self.mode,
+            pursuit: self.pursuit,
+            successful: self.successful_count(),
+            target_n: self.target_n(),
+            solo_waiver: self.solo_waiver,
+        }
+    }
+}
+
+// ── TUI chrome labels (pure) ───────────────────────────────────────────────
+
+/// Effort fields the TUI needs for the status-bar chip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffortChromeState {
+    pub mode: EffortMode,
+    pub pursuit: PursuitState,
+    pub successful: usize,
+    pub target_n: Option<usize>,
+    pub solo_waiver: bool,
+}
+
+impl EffortChromeState {
+    /// Status-bar label from shell effort state, or `None` when Normal
+    /// (elevated chrome must disappear).
+    ///
+    /// Examples: `Expert`, `Expert 2 of 4`, `Heavy Partial 3 of 16`,
+    /// `Expert Waived`.
+    pub fn status_label(self) -> Option<String> {
+        format_effort_chrome_label(self)
+    }
+}
+
+/// Format the durable TUI effort chrome label from shipped tracker fields.
+///
+/// Drive this helper from unit tests and from the wire payload builder so
+/// progress math is not reimplemented in the pager.
+pub fn format_effort_chrome_label(state: EffortChromeState) -> Option<String> {
+    if !state.mode.is_elevated() {
+        return None;
+    }
+    let name = match state.mode {
+        EffortMode::Expert => "Expert",
+        EffortMode::Heavy => "Heavy",
+        EffortMode::Normal => return None,
+    };
+    if state.solo_waiver || state.pursuit == PursuitState::Waived {
+        return Some(format!("{name} Waived"));
+    }
+    let n = state.target_n.unwrap_or(0);
+    let s = state.successful;
+    match state.pursuit {
+        PursuitState::PartialReport => {
+            if n > 0 {
+                Some(format!("{name} Partial {s} of {n}"))
+            } else {
+                Some(format!("{name} Partial"))
+            }
+        }
+        PursuitState::Pursuing | PursuitState::Aborting => {
+            if n > 0 {
+                Some(format!("{name} {s} of {n}"))
+            } else {
+                Some(name.to_string())
+            }
+        }
+        PursuitState::Idle | PursuitState::Waived => Some(name.to_string()),
+    }
+}
+
+/// Wire payload fields for `SessionUpdate::EffortModeUpdated`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffortChromeWire {
+    pub mode: String,
+    pub pursuit: String,
+    pub label: Option<String>,
+    pub successful: usize,
+    pub target_n: Option<usize>,
+    pub solo_waiver: bool,
+}
+
+impl EffortChromeState {
+    pub fn to_wire(self) -> EffortChromeWire {
+        EffortChromeWire {
+            mode: self.mode.as_str().to_string(),
+            pursuit: match self.pursuit {
+                PursuitState::Idle => "idle",
+                PursuitState::Pursuing => "pursuing",
+                PursuitState::Aborting => "aborting",
+                PursuitState::PartialReport => "partial_report",
+                PursuitState::Waived => "waived",
+            }
+            .to_string(),
+            label: format_effort_chrome_label(self),
+            successful: self.successful,
+            target_n: self.target_n,
+            solo_waiver: self.solo_waiver,
+        }
+    }
 }
 
 // ── Mandatory team briefs (pure) ───────────────────────────────────────────
@@ -1393,5 +1495,104 @@ mod tests {
         assert!(p.contains("mandatory"));
         assert!(p.contains("N=16"));
         assert!(p.contains("Do not re-spawn"));
+    }
+
+    #[test]
+    fn chrome_label_expert_heavy_progress_partial_waived_normal_clears() {
+        // Normal → no elevated chrome.
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Normal,
+                pursuit: PursuitState::Idle,
+                successful: 0,
+                target_n: None,
+                solo_waiver: false,
+            }),
+            None
+        );
+
+        // Sticky Expert idle → mode name only.
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Expert,
+                pursuit: PursuitState::Idle,
+                successful: 0,
+                target_n: Some(4),
+                solo_waiver: false,
+            }),
+            Some("Expert".into())
+        );
+
+        // Pursuing with S of N.
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Expert,
+                pursuit: PursuitState::Pursuing,
+                successful: 2,
+                target_n: Some(4),
+                solo_waiver: false,
+            }),
+            Some("Expert 2 of 4".into())
+        );
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Heavy,
+                pursuit: PursuitState::Pursuing,
+                successful: 12,
+                target_n: Some(16),
+                solo_waiver: false,
+            }),
+            Some("Heavy 12 of 16".into())
+        );
+
+        // Partial / Waived.
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Heavy,
+                pursuit: PursuitState::PartialReport,
+                successful: 3,
+                target_n: Some(16),
+                solo_waiver: false,
+            }),
+            Some("Heavy Partial 3 of 16".into())
+        );
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Expert,
+                pursuit: PursuitState::Waived,
+                successful: 0,
+                target_n: Some(4),
+                solo_waiver: false,
+            }),
+            Some("Expert Waived".into())
+        );
+        assert_eq!(
+            format_effort_chrome_label(EffortChromeState {
+                mode: EffortMode::Expert,
+                pursuit: PursuitState::Idle,
+                successful: 0,
+                target_n: Some(4),
+                solo_waiver: true,
+            }),
+            Some("Expert Waived".into())
+        );
+
+        // Tracker path: begin team → chrome shows 0 of 4; success → 1 of 4.
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        assert_eq!(t.chrome_state().status_label().as_deref(), Some("Expert"));
+        t.begin_team_run().unwrap();
+        assert_eq!(
+            t.chrome_state().status_label().as_deref(),
+            Some("Expert 0 of 4")
+        );
+        t.record_outcome(0, SpecialistStatus::Success, Some("a".into()))
+            .unwrap();
+        assert_eq!(
+            t.chrome_state().status_label().as_deref(),
+            Some("Expert 1 of 4")
+        );
+        t.clear_to_normal();
+        assert_eq!(t.chrome_state().status_label(), None);
     }
 }

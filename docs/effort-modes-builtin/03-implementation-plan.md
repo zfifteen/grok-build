@@ -81,7 +81,8 @@ Exit:
 ### PR-3.4 — Transparency
 
 - [x] `progress_label` S of N for partial/abort UX.  
-- [ ] Subagent inspect UI link (chrome follow-up).
+- [x] Full sticky TUI chrome: `EffortModeUpdated` + pager status chip (mode + S of N + Partial/Waived).  
+- [ ] Subagent inspect UI link (optional follow-up).
 
 **Phase 3 exit:** shell-owned mode + soft policy + hard execute gate; team spawn still model-obedient.
 

@@ -6,7 +6,8 @@
 
 use std::path::PathBuf;
 use xai_grok_shell::session::effort_mode::{
-    EffortGateError, EffortMode, EffortModeTracker, SpecialistStatus, build_specialist_briefs,
+    EffortChromeState, EffortGateError, EffortMode, EffortModeTracker, PursuitState,
+    SpecialistStatus, build_specialist_briefs, format_effort_chrome_label,
     format_team_report_package, is_trivial_task, parse_solo_and_task,
 };
 use xai_grok_shell::session::{EffortSlashResolve, resolve_effort_slash};
@@ -402,4 +403,113 @@ fn heavy_mandatory_team_requires_contrarian_success() {
     assert!(pkg.contains("mandatory team complete"));
     assert!(pkg.contains("contrarian"));
     assert!(pkg.contains("body-15"));
+}
+
+// ── Criterion 7: full chrome labels (mode + S of N + Partial/Waived) ───────
+
+#[test]
+fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
+    // (a) Expert / Heavy sticky chrome names the mode.
+    assert_eq!(
+        format_effort_chrome_label(EffortChromeState {
+            mode: EffortMode::Expert,
+            pursuit: PursuitState::Idle,
+            successful: 0,
+            target_n: Some(4),
+            solo_waiver: false,
+        })
+        .as_deref(),
+        Some("Expert")
+    );
+    assert_eq!(
+        format_effort_chrome_label(EffortChromeState {
+            mode: EffortMode::Heavy,
+            pursuit: PursuitState::Idle,
+            successful: 0,
+            target_n: Some(16),
+            solo_waiver: false,
+        })
+        .as_deref(),
+        Some("Heavy")
+    );
+
+    // (b) Normal clears elevated chrome.
+    assert_eq!(
+        format_effort_chrome_label(EffortChromeState {
+            mode: EffortMode::Normal,
+            pursuit: PursuitState::Idle,
+            successful: 0,
+            target_n: None,
+            solo_waiver: false,
+        }),
+        None
+    );
+
+    // (c) Pursuing ledger with known S and N.
+    assert_eq!(
+        format_effort_chrome_label(EffortChromeState {
+            mode: EffortMode::Expert,
+            pursuit: PursuitState::Pursuing,
+            successful: 2,
+            target_n: Some(4),
+            solo_waiver: false,
+        })
+        .as_deref(),
+        Some("Expert 2 of 4")
+    );
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Heavy, false);
+    t.begin_team_run().unwrap();
+    let label = t.chrome_state().status_label().expect("heavy pursuing chrome");
+    assert!(label.contains("Heavy"), "{label}");
+    assert!(label.contains("0 of 16"), "{label}");
+    for i in 0..5 {
+        t.record_outcome(i, SpecialistStatus::Success, Some(format!("t{i}")))
+            .unwrap();
+    }
+    let label = t.chrome_state().status_label().expect("progress");
+    assert_eq!(label, "Heavy 5 of 16");
+
+    // (d) Partial / Waived labels.
+    assert_eq!(
+        format_effort_chrome_label(EffortChromeState {
+            mode: EffortMode::Expert,
+            pursuit: PursuitState::PartialReport,
+            successful: 1,
+            target_n: Some(4),
+            solo_waiver: false,
+        })
+        .as_deref(),
+        Some("Expert Partial 1 of 4")
+    );
+    assert_eq!(
+        format_effort_chrome_label(EffortChromeState {
+            mode: EffortMode::Heavy,
+            pursuit: PursuitState::Waived,
+            successful: 0,
+            target_n: Some(16),
+            solo_waiver: false,
+        })
+        .as_deref(),
+        Some("Heavy Waived")
+    );
+
+    // Wire payload carries the same shipped label (no pager reimplementation).
+    let wire = t.chrome_state().to_wire();
+    assert_eq!(wire.mode, "heavy");
+    assert_eq!(wire.pursuit, "pursuing");
+    assert_eq!(wire.label.as_deref(), Some("Heavy 5 of 16"));
+    assert_eq!(wire.successful, 5);
+    assert_eq!(wire.target_n, Some(16));
+}
+
+#[test]
+fn effort_chrome_wire_clears_on_normal() {
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Expert, false);
+    assert!(t.chrome_state().to_wire().label.is_some());
+    t.clear_to_normal();
+    let wire = t.chrome_state().to_wire();
+    assert_eq!(wire.mode, "normal");
+    assert!(wire.label.is_none());
 }

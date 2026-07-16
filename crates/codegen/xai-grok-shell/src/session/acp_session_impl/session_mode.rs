@@ -350,6 +350,38 @@ impl SessionActor {
             .send(PersistenceMsg::PlanModeState(snapshot));
     }
 
+    /// Emit sticky effort chrome to the pager (mode + S of N + Partial/Waived).
+    ///
+    /// Sync-safe: persists + enqueues on the session event FIFO (same pattern
+    /// as plan `CurrentModeUpdate` enqueue) so live UI cannot drift from the
+    /// ledger without relying on model prose.
+    pub(super) fn emit_effort_chrome_update(&self) {
+        use crate::extensions::notification::{
+            SessionNotification as XaiSessionNotification, SessionUpdate as XaiSessionUpdate,
+        };
+        use crate::session::replay_events::SessionEvent;
+
+        let wire = self.effort_mode.lock().chrome_state().to_wire();
+        let update = XaiSessionUpdate::EffortModeUpdated {
+            mode: wire.mode,
+            pursuit: wire.pursuit,
+            label: wire.label,
+            successful: wire.successful,
+            target_n: wire.target_n,
+            solo_waiver: wire.solo_waiver,
+        };
+        // Durable for resume/replay viewers.
+        self.persist_xai_update_only(update.clone());
+        let notification = XaiSessionNotification {
+            session_id: self.session_info.id.clone(),
+            update,
+            meta: None,
+        };
+        let _ = self
+            .event_tx
+            .send(SessionEvent::Notification(notification.into()));
+    }
+
     /// Inject soft effort-mode policy when sticky mode is Expert/Heavy.
     /// Mirrors plan-mode per-turn reminder injection.
     pub(super) async fn inject_effort_mode_reminders(&self) {
@@ -378,8 +410,13 @@ impl SessionActor {
                 );
                 drop(tracker);
                 self.persist_effort_mode_state();
+                self.emit_effort_chrome_update();
             }
-            Ok(false) => {}
+            Ok(false) => {
+                // Solo/trivial/already-pursuing may still change Waived chrome.
+                drop(tracker);
+                self.emit_effort_chrome_update();
+            }
             Err(e) => {
                 tracing::debug!(
                     session_id = %self.session_info.id.0,
@@ -450,6 +487,8 @@ impl SessionActor {
             }
             drop(tracker);
             self.persist_effort_mode_state();
+            // Show Expert/Heavy 0 of N before specialists finish.
+            self.emit_effort_chrome_update();
         }
 
         tracing::info!(
@@ -536,6 +575,7 @@ impl SessionActor {
                 hard_stop,
                 "effort mode: mandatory team join finished"
             );
+            self.emit_effort_chrome_update();
         }
     }
 
@@ -550,6 +590,7 @@ impl SessionActor {
             );
             drop(tracker);
             self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
         }
     }
 
@@ -565,6 +606,7 @@ impl SessionActor {
             );
             drop(tracker);
             self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
         }
     }
 
@@ -579,6 +621,7 @@ impl SessionActor {
                 let progress = tracker.progress_label();
                 drop(tracker);
                 self.persist_effort_mode_state();
+                self.emit_effort_chrome_update();
                 if done {
                     tracing::info!(
                         session_id = %self.session_info.id.0,
@@ -613,6 +656,7 @@ impl SessionActor {
             .on_session_specialist_outcome(slot, status, task_id);
         if result.is_ok() {
             self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
         }
         result
     }
@@ -631,6 +675,7 @@ impl SessionActor {
         if done || tracker.pursuit() == crate::session::effort_mode::PursuitState::Pursuing {
             drop(tracker);
             self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
             if done {
                 tracing::info!(
                     session_id = %self.session_info.id.0,
@@ -658,6 +703,7 @@ impl SessionActor {
             }
         }
         self.persist_effort_mode_state();
+        self.emit_effort_chrome_update();
         tracing::info!(
             session_id = %self.session_info.id.0,
             mode = mode.as_str(),
@@ -665,9 +711,6 @@ impl SessionActor {
             solo,
             "effort mode set",
         );
-        // Chrome / telemetry: surface mode in structured logs (pill hooks
-        // can subscribe via session logs until a dedicated Event variant
-        // is added to xai-file-utils).
         tracing::info_span!(
             "session.effort_mode_toggled",
             mode = mode.as_str(),

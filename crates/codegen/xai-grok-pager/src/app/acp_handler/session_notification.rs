@@ -990,6 +990,25 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
         XaiSessionUpdate::InteractionResolved { tool_call_id } => {
             agent.dismiss_resolved_interaction(&tool_call_id)
         }
+        XaiSessionUpdate::EffortModeUpdated {
+            mode,
+            pursuit,
+            label,
+            successful,
+            target_n,
+            solo_waiver,
+        } => {
+            apply_effort_mode_chrome(
+                agent,
+                &mode,
+                &pursuit,
+                label,
+                successful,
+                target_n,
+                solo_waiver,
+            );
+            true
+        }
         _ => {
             tracing::trace!(
                 "Ignoring {}: {:?}",
@@ -1322,6 +1341,38 @@ pub(super) fn apply_retry_state(
         session.in_flight_prompt = None;
     }
 }
+/// Apply shell `EffortModeUpdated` to agent status chrome.
+///
+/// `label == None` or `mode == "normal"` clears elevated Expert/Heavy chrome.
+pub(crate) fn apply_effort_mode_chrome(
+    agent: &mut AgentView,
+    mode: &str,
+    pursuit: &str,
+    label: Option<String>,
+    successful: usize,
+    target_n: Option<usize>,
+    solo_waiver: bool,
+) {
+    if mode == "normal" || label.is_none() {
+        agent.effort_chrome = None;
+    } else if let Some(label) = label {
+        agent.effort_chrome = Some(crate::app::agent_view::EffortChromeDisplay {
+            mode: mode.to_string(),
+            pursuit: pursuit.to_string(),
+            label,
+            successful,
+            target_n,
+            solo_waiver,
+        });
+    }
+    tracing::debug!(
+        mode = %mode,
+        pursuit = %pursuit,
+        has_chrome = agent.effort_chrome.is_some(),
+        "Effort mode chrome updated"
+    );
+}
+
 /// Single source of truth for plan-mode state on the pager side.
 ///
 /// The agent emits `CurrentModeUpdate` on every entry and exit — both for
