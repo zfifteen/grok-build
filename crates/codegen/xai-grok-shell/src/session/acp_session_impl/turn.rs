@@ -657,6 +657,9 @@ impl SessionActor {
         self.inject_plan_mode_reminders().await;
         // Hard runtime: open fixed-team ledger for elevated non-solo work.
         self.effort_on_turn_start(&user_message);
+        // Mandatory Expert/Heavy fan-out (shell-owned join-all) before the
+        // leader model turn — not soft policy / model-obedient spawn.
+        self.maybe_run_mandatory_effort_team(&user_message).await;
         self.inject_effort_mode_reminders().await;
         self.inject_resumed_tasks_reminder();
         self.drain_between_turn_completions().await;

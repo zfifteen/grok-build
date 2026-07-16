@@ -113,7 +113,8 @@ Exit:
 
 - [x] `abort_team` → PartialReport; `/normal` → `clear_to_normal`.
 
-**Phase 4 exit:** B3–B9 green via pure FSM + integration tests; live subagent orchestration remains soft.
+**Phase 4 exit (updated):** B3–B9 green via pure FSM + integration tests.  
+**Live mandatory fan-out:** shell-owned `maybe_run_mandatory_effort_team` (Expert N=4 / Heavy N=16) spawns + join-all before the leader model turn; team spawn is no longer model-obedient soft policy.
 
 ---
 

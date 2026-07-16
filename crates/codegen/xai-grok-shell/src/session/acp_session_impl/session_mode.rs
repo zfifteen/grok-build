@@ -390,6 +390,155 @@ impl SessionActor {
         }
     }
 
+    /// Shell-owned mandatory Expert/Heavy fan-out: spawn N specialists,
+    /// join-all, record ledger outcomes, inject report package for the leader.
+    ///
+    /// Runs only when `needs_mandatory_fanout()` (pending unbound slots).
+    /// Does **not** rely on the model calling `spawn_subagent`.
+    pub(super) async fn maybe_run_mandatory_effort_team(&self, task_text: &str) {
+        let (needs, mode) = {
+            let tracker = self.effort_mode.lock();
+            (tracker.needs_mandatory_fanout(), tracker.mode())
+        };
+        if !needs {
+            return;
+        }
+
+        let Some(event_tx) = self.tool_context.subagent_event_tx.clone() else {
+            tracing::warn!(
+                session_id = %self.session_info.id.0,
+                "effort mode: mandatory team requested but subagent channel missing"
+            );
+            self.push_system_reminder_with_tag(
+                "Effort mode: mandatory specialist team could not start (subagents unavailable). \
+                 Writes stay blocked until synthesis, abort, --solo, or /normal.",
+                self.reminder_wrapper_tag(),
+            );
+            return;
+        };
+
+        let parent_prompt_id = self
+            .current_prompt_id
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+        let cwd = Some(self.session_info.cwd.clone());
+        let parent_session_id = self.session_info.id.0.to_string();
+
+        let n = mode.team_size_default().unwrap_or(0);
+        let planned = crate::session::effort_team::plan_mandatory_team(mode, task_text);
+        if planned.is_empty() {
+            return;
+        }
+
+        // Pre-bind every slot → task_id (Running) before spawn so join maps 1:1.
+        {
+            let mut tracker = self.effort_mode.lock();
+            for p in &planned {
+                if let Err(e) = tracker.record_outcome(
+                    p.brief.slot,
+                    crate::session::effort_mode::SpecialistStatus::Running,
+                    Some(p.task_id.clone()),
+                ) {
+                    tracing::warn!(
+                        session_id = %self.session_info.id.0,
+                        slot = p.brief.slot,
+                        error = %e,
+                        "effort mode: failed to pre-bind specialist slot"
+                    );
+                }
+            }
+            drop(tracker);
+            self.persist_effort_mode_state();
+        }
+
+        tracing::info!(
+            session_id = %self.session_info.id.0,
+            mode = mode.as_str(),
+            n,
+            "effort mode: launching mandatory specialist team"
+        );
+
+        let joins = crate::session::effort_team::run_planned_team(
+            &event_tx,
+            &parent_session_id,
+            parent_prompt_id,
+            cwd,
+            planned,
+        )
+        .await;
+
+        // Apply join results by slot (source of truth for this orchestration).
+        {
+            let mut tracker = self.effort_mode.lock();
+            for join in &joins {
+                let status = if join.cancelled {
+                    crate::session::effort_mode::SpecialistStatus::Cancelled
+                } else if join.success {
+                    crate::session::effort_mode::SpecialistStatus::Success
+                } else {
+                    crate::session::effort_mode::SpecialistStatus::Failed
+                };
+                if let Err(e) = tracker.on_session_specialist_outcome(
+                    join.brief.slot,
+                    status,
+                    Some(join.task_id.clone()),
+                ) {
+                    tracing::debug!(
+                        session_id = %self.session_info.id.0,
+                        task_id = %join.task_id,
+                        slot = join.brief.slot,
+                        error = %e,
+                        "effort mode: join record failed"
+                    );
+                }
+            }
+            let progress = tracker.progress_label();
+            let synth = tracker.synthesis_complete();
+            let hard_stop = tracker.is_hard_stop();
+            drop(tracker);
+            self.persist_effort_mode_state();
+
+            // Package reports for the leader (success and failure bodies).
+            let report_pairs: Vec<_> = joins
+                .iter()
+                .map(|j| (j.brief.clone(), j.body.clone()))
+                .collect();
+            let package = crate::session::effort_mode::format_team_report_package(
+                mode,
+                &progress,
+                &report_pairs,
+            );
+            let mut body = package;
+            if synth {
+                body.push_str(
+                    "\nFull-team synthesis gate is satisfied. Synthesize and answer the user. \
+                     Execute/write tools are unlocked (unless plan mode blocks).",
+                );
+            } else if hard_stop {
+                body.push_str(&format!(
+                    "\n**Hard-stop:** team short of N ({progress}). Writes stay blocked. \
+                     User choices: continue (one more replace wave), --solo, or /normal."
+                ));
+            } else {
+                body.push_str(&format!(
+                    "\nTeam incomplete ({progress}). Writes stay blocked until full claim, \
+                     abort/partial, --solo, or /normal."
+                ));
+            }
+            self.push_system_reminder_with_tag(&body, self.reminder_wrapper_tag());
+
+            tracing::info!(
+                session_id = %self.session_info.id.0,
+                mode = mode.as_str(),
+                progress = %progress,
+                synthesis_complete = synth,
+                hard_stop,
+                "effort mode: mandatory team join finished"
+            );
+        }
+    }
+
     /// User cancel: abort in-flight effort team → PartialReport (S of N).
     pub(super) fn effort_on_user_cancel(&self) {
         let mut tracker = self.effort_mode.lock();

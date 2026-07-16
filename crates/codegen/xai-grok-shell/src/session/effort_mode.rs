@@ -743,6 +743,10 @@ impl EffortModeTracker {
     }
 
     /// Soft policy text injected into the leader prompt under Expert/Heavy.
+    ///
+    /// Fan-out itself is **shell-mandatory** (see `needs_mandatory_fanout` +
+    /// SessionActor orchestration). This reminder tells the leader to
+    /// synthesize from the team package rather than re-spawn.
     pub fn policy_reminder(&self, plan_mode_active: bool) -> Option<String> {
         if !self.mode.is_elevated() {
             return None;
@@ -766,10 +770,12 @@ impl EffortModeTracker {
         // Body only — callers wrap with `<system-reminder>` (or the
         // session reminder tag) so injection paths never double-nest tags.
         Some(format!(
-            "Effort mode: {mode}. For non-trivial work, run a fixed analytic team of N={n} \
-             specialists (join-all). {contrarian} Do not claim full-team completion with fewer \
-             than N successful specialist reports. Execute/write only after synthesis; any \
-             implementer runs outside N.{plan}{solo}\n\
+            "Effort mode: {mode}. For non-trivial work the shell runs a **mandatory** fixed \
+             analytic team of N={n} specialists (join-all) before you synthesize. \
+             {contrarian} Do not claim full-team completion with fewer than N successful \
+             specialist reports. Do not re-spawn the fixed team — use the team report package \
+             when present. Execute/write only after synthesis; any implementer runs outside N.\
+             {plan}{solo}\n\
              Effort mode never enables always-approve/yolo.",
             mode = self.mode.as_str(),
             n = n,
@@ -778,6 +784,131 @@ impl EffortModeTracker {
             solo = solo,
         ))
     }
+
+    /// True when sticky elevated mode has open fixed-team slots that still
+    /// need shell-owned spawn (pending, unbound `task_id`).
+    pub fn needs_mandatory_fanout(&self) -> bool {
+        if !self.mode.is_elevated() || self.solo_waiver {
+            return false;
+        }
+        if self.pursuit != PursuitState::Pursuing {
+            return false;
+        }
+        self.ledger.iter().any(|r| {
+            !r.outside_n
+                && r.task_id.is_none()
+                && matches!(r.status, SpecialistStatus::Pending)
+        })
+    }
+}
+
+// ── Mandatory team briefs (pure) ───────────────────────────────────────────
+
+/// One specialist brief for shell-owned Expert/Heavy fan-out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecialistBrief {
+    pub slot: usize,
+    pub role: String,
+    pub is_contrarian: bool,
+    pub description: String,
+    pub prompt: String,
+}
+
+/// Build N specialist briefs for a mandatory team run under `mode`.
+///
+/// Expert → 4; Heavy → 16 with the last slot marked contrarian.
+/// Returns empty when mode is Normal.
+pub fn build_specialist_briefs(mode: EffortMode, task_text: &str) -> Vec<SpecialistBrief> {
+    let Some(n) = mode.team_size_default() else {
+        return Vec::new();
+    };
+    let task = task_text.trim();
+    let task = if task.is_empty() {
+        "(no task text — analyze the current session context and codebase)"
+    } else {
+        task
+    };
+    let mode_name = mode.as_str();
+    (0..n)
+        .map(|i| {
+            let is_contrarian = mode.requires_contrarian() && i == n - 1;
+            let role = if is_contrarian {
+                format!("contrarian-{i}")
+            } else {
+                format!("specialist-{i}")
+            };
+            let description = if is_contrarian {
+                format!("{mode_name} contrarian specialist {i}/{n}")
+            } else {
+                format!("{mode_name} specialist {i}/{n}")
+            };
+            let angle = specialist_angle(i, n, is_contrarian);
+            let prompt = format!(
+                "You are specialist slot {i} of {n} on a **mandatory** {mode_name} effort-mode \
+                 analytic team (join-all). The shell launched you; do not spawn further subagents.\n\
+                 \n\
+                 **Role:** {role}\n\
+                 **Analytic angle:** {angle}\n\
+                 \n\
+                 **User task:**\n{task}\n\
+                 \n\
+                 Produce a structured specialist report: findings, evidence (paths/symbols), \
+                 risks, and an independent verdict. Stay analytic and non-writing \
+                 (read/search only). End with a short summary the lead agent can synthesize."
+            );
+            SpecialistBrief {
+                slot: i,
+                role,
+                is_contrarian,
+                description,
+                prompt,
+            }
+        })
+        .collect()
+}
+
+fn specialist_angle(slot: usize, n: usize, is_contrarian: bool) -> &'static str {
+    if is_contrarian {
+        return "Contrarian: challenge assumptions, find holes, argue the strongest case against the leading approach";
+    }
+    // Cycle distinct angles so N=4 and N=16 both get diversity without N templates.
+    match slot % 4 {
+        0 => "Correctness / verification: invariants, edge cases, tests, failure modes",
+        1 => "Architecture / design: structure, coupling, alternatives, migration risk",
+        2 => "Implementation / ops: build, integration, performance, operability",
+        _ => {
+            if n > 4 && slot >= n / 2 {
+                "Synthesis prep: cross-cut gaps, residual risks, readiness criteria"
+            } else {
+                "Product / UX / operator impact: clarity, observability, user-visible behavior"
+            }
+        }
+    }
+}
+
+/// Format joined specialist reports for injection into the leader turn.
+pub fn format_team_report_package(
+    mode: EffortMode,
+    progress: &str,
+    reports: &[(SpecialistBrief, String)],
+) -> String {
+    let mode_name = mode.as_str();
+    let mut out = format!(
+        "Effort mode: {mode_name} — **mandatory team complete** ({progress}). \
+         Synthesize these specialist reports into your answer. Do not re-run the fixed team.\n"
+    );
+    for (brief, body) in reports {
+        let tag = if brief.is_contrarian {
+            "contrarian"
+        } else {
+            "specialist"
+        };
+        out.push_str(&format!(
+            "\n--- {tag} slot {} ({}) ---\n{}\n",
+            brief.slot, brief.role, body
+        ));
+    }
+    out
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────────
@@ -1204,5 +1335,63 @@ mod tests {
     fn triviality_helper() {
         assert!(is_trivial_task("fix typo in readme"));
         assert!(!is_trivial_task("architect multi-file migration of auth"));
+    }
+
+    #[test]
+    fn specialist_briefs_expert_n4_and_heavy_n16() {
+        let expert = build_specialist_briefs(EffortMode::Expert, "audit auth");
+        assert_eq!(expert.len(), 4);
+        assert!(expert.iter().all(|b| !b.is_contrarian));
+        assert!(expert[0].prompt.contains("audit auth"));
+        assert!(expert[0].description.contains("expert specialist"));
+
+        let heavy = build_specialist_briefs(EffortMode::Heavy, "deep audit");
+        assert_eq!(heavy.len(), 16);
+        assert!(heavy[15].is_contrarian);
+        assert_eq!(heavy[15].role, "contrarian-15");
+        assert!(heavy[15].prompt.contains("Contrarian"));
+        assert!(heavy.iter().take(15).all(|b| !b.is_contrarian));
+
+        assert!(build_specialist_briefs(EffortMode::Normal, "x").is_empty());
+    }
+
+    #[test]
+    fn needs_mandatory_fanout_while_pending_unbound() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        assert!(!t.needs_mandatory_fanout());
+        t.begin_team_run().unwrap();
+        assert!(t.needs_mandatory_fanout());
+        // Bind one slot — still needs fanout for remaining.
+        assert_eq!(t.assign_next_pending_task("s0"), Some(0));
+        assert!(t.needs_mandatory_fanout());
+        for i in 1..4 {
+            assert_eq!(t.assign_next_pending_task(format!("s{i}")), Some(i));
+        }
+        assert!(!t.needs_mandatory_fanout());
+    }
+
+    #[test]
+    fn team_report_package_includes_slots() {
+        let briefs = build_specialist_briefs(EffortMode::Expert, "task");
+        let reports: Vec<_> = briefs
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| (b, format!("report-{i}")))
+            .collect();
+        let pkg = format_team_report_package(EffortMode::Expert, "4 of 4", &reports);
+        assert!(pkg.contains("mandatory team complete"));
+        assert!(pkg.contains("report-0"));
+        assert!(pkg.contains("slot 3"));
+    }
+
+    #[test]
+    fn policy_reminder_states_mandatory_shell_team() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Heavy, false);
+        let p = t.policy_reminder(false).unwrap();
+        assert!(p.contains("mandatory"));
+        assert!(p.contains("N=16"));
+        assert!(p.contains("Do not re-spawn"));
     }
 }

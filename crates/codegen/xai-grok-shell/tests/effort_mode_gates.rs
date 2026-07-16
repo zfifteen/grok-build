@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 use xai_grok_shell::session::effort_mode::{
-    EffortGateError, EffortMode, EffortModeTracker, SpecialistStatus, is_trivial_task,
-    parse_solo_and_task,
+    EffortGateError, EffortMode, EffortModeTracker, SpecialistStatus, build_specialist_briefs,
+    format_team_report_package, is_trivial_task, parse_solo_and_task,
 };
 use xai_grok_shell::session::{EffortSlashResolve, resolve_effort_slash};
 
@@ -323,6 +323,83 @@ fn normal_idle_and_policy_never_implies_yolo() {
     t.set_mode(EffortMode::Heavy, false);
     let p = t.policy_reminder(false).unwrap();
     assert!(p.contains("never enables always-approve"));
+    assert!(p.contains("mandatory"));
     assert!(is_trivial_task("fix typo in readme"));
     assert!(!is_trivial_task("architect multi-file migration of auth"));
+}
+
+// ── Criterion 6: mandatory team briefs (Expert N=4 / Heavy N=16) ───────────
+
+#[test]
+fn mandatory_specialist_briefs_expert_and_heavy() {
+    let expert = build_specialist_briefs(EffortMode::Expert, "architect multi-file audit");
+    assert_eq!(expert.len(), 4);
+    assert!(expert.iter().all(|b| !b.is_contrarian));
+    assert!(expert[0].prompt.contains("mandatory"));
+    assert!(expert[0].prompt.contains("architect multi-file audit"));
+
+    let heavy = build_specialist_briefs(EffortMode::Heavy, "deep research");
+    assert_eq!(heavy.len(), 16);
+    assert!(heavy[15].is_contrarian);
+    assert!(heavy[15].role.starts_with("contrarian-"));
+    assert!(heavy.iter().take(15).all(|b| !b.is_contrarian));
+
+    assert!(build_specialist_briefs(EffortMode::Normal, "x").is_empty());
+}
+
+#[test]
+fn needs_mandatory_fanout_tracks_unbound_pending_slots() {
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Expert, false);
+    assert!(!t.needs_mandatory_fanout());
+    t.on_session_turn_start("architect multi-file migration")
+        .unwrap();
+    assert!(t.needs_mandatory_fanout());
+    // Pre-bind all slots as the shell orchestrator does before spawn.
+    for i in 0..4 {
+        t.record_outcome(
+            i,
+            SpecialistStatus::Running,
+            Some(format!("task-{i}")),
+        )
+        .unwrap();
+    }
+    assert!(!t.needs_mandatory_fanout());
+    // Full success finalizes and unlocks execute.
+    for i in 0..4 {
+        t.on_session_specialist_outcome(i, SpecialistStatus::Success, Some(format!("task-{i}")))
+            .unwrap();
+    }
+    assert!(t.synthesis_complete());
+    assert!(t.may_execute_writes(false).is_ok());
+}
+
+#[test]
+fn heavy_mandatory_team_requires_contrarian_success() {
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Heavy, false);
+    t.begin_team_run().unwrap();
+    assert!(t.needs_mandatory_fanout());
+    assert_eq!(t.ledger().len(), 16);
+    assert!(t.ledger()[15].is_contrarian);
+
+    // 16 successes without marking contrarian on last would still work because
+    // begin_team_run already set is_contrarian on slot 15.
+    for i in 0..16 {
+        t.on_session_specialist_outcome(i, SpecialistStatus::Success, Some(format!("h{i}")))
+            .unwrap();
+    }
+    assert!(t.synthesis_complete());
+    assert!(t.may_execute_writes(false).is_ok());
+
+    let briefs = build_specialist_briefs(EffortMode::Heavy, "task");
+    let reports: Vec<_> = briefs
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| (b, format!("body-{i}")))
+        .collect();
+    let pkg = format_team_report_package(EffortMode::Heavy, "16 of 16", &reports);
+    assert!(pkg.contains("mandatory team complete"));
+    assert!(pkg.contains("contrarian"));
+    assert!(pkg.contains("body-15"));
 }
