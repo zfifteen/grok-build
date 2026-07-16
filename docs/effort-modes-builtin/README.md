@@ -40,13 +40,16 @@ Phase 1 does **not** change runtime behavior.
 
 ## Prior art (external SoT for behavior)
 
+**Portable (what the specs mean):** research design archive *Grok Build Effort Modes* — Specs 10 (behavioral), 11 (delivery constraint), 12 (skills-first v1), 13–14 (join/abort/replace/solo). That tree is **not vendored** in this repository.
+
+**Operator workstation (Velocity Works layout, not portable to every clone):**
+
 | Source | Role |
 |--------|------|
-| `research/grok-build-effort-modes/docs/tech-specs/10-requirements-refinement.md` | Locked behavioral requirements |
-| Specs 13–14 | Join / completed / execute; abort, replace caps, solo |
-| Spec 12 | Skills-first v1 ship law (historical delivery) |
-| Spec 11 | Builtin-path dead-end analysis (now unblocked) |
-| `~/.grok/skills/{expert,heavy,normal}/SKILL.md` | Live policy approximation |
+| `IdeaProjects/research/grok-build-effort-modes/docs/tech-specs/` | Spec files 00–14 on principal machine |
+| User skills `~/.grok/skills/{expert,heavy,normal}/` | Live skills-first v1 packages when installed |
+
+External reviewers: treat absolute home/IdeaProjects paths as **agency-local SoT**, not required inputs to build this monorepo.
 
 ## Reading order
 

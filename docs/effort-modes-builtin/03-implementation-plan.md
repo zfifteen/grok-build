@@ -41,22 +41,23 @@ Exit:
 ### PR-2.2 — `EffortModeTracker`
 
 - New `session/effort_mode.rs` pure FSM: mode set/clear, pursuit stubs, snapshot.  
-- SessionActor ownership + `effort_mode.json` persist/restore (mirror plan).  
-- Unit tests for transitions.
+- SessionActor ownership.  
+- **Persist/restore:** Q1 is **frozen to A (persist)** — implement `effort_mode.json` mirror of plan mode (see tech spec §5 + decision log).  
+- Unit tests for transitions + snapshot round-trip.
 
 ### PR-2.3 — Slash builtins
 
-- Register `/expert` `/heavy` `/normal` in `BUILTIN_COMMANDS`.  
-- `BuiltinAction::SetEffortMode`.  
+- Register `/expert` `/heavy` `/normal` in `BUILTIN_COMMANDS` **behind** `effort_mode_builtins` (when off: names absent from resolve + autocomplete).  
+- `BuiltinAction::SetEffortMode`; parse `--solo` in resolve before constructing the action.  
 - Dispatch: update tracker; empty form → no model turn if product pattern allows (else minimal system notice); args form → enqueue prompt.  
-- Tests: resolve names, `--solo` parse, skill name collision preference.
+- Tests: resolve names, `--solo` parse, skill name collision preference, flag-off fallthrough to skills.
 
 ### PR-2.4 — Chrome stub
 
 - Surface current EffortMode in session info / minimal pill hook.  
 - Telemetry `EffortModeToggled`.
 
-**Phase 2 exit:** builtins exist; sticky mode persists on resume; no hard multi-agent yet (optional soft reminder only).
+**Phase 2 exit:** builtins exist when flag on; sticky mode **persists on resume** (Q1=A); flag-off restores skill slash; no hard multi-agent yet (optional soft reminder only).
 
 ---
 
@@ -65,7 +66,8 @@ Exit:
 ### PR-3.1 — Leader policy injection
 
 - On turn start under Expert/Heavy, inject structured effort policy (N, contrarian, execute-after-synthesis, join_all).  
-- Plan-active: inject non-writing constraint.
+- Plan-active: inject non-writing constraint.  
+- **Use existing agent prompt APIs** in `crates/codegen/xai-grok-agent` (e.g. `PromptExtension` / system-prompt builder patterns already used for plan and other session overlays) — do not invent a one-off string concat path.
 
 ### PR-3.2 — Triviality + solo
 

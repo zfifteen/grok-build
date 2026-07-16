@@ -6,18 +6,18 @@
 
 ---
 
-## Q1 — Persist EffortMode across process resume?
+## Q1 — Persist EffortMode across process resume? — **FROZEN = A**
 
-**Context:** Research Spec 01 said session modes do not restore across restarts. Product **Plan** mode persists via `plan_mode.json`.
+**Context:** Research **Spec 10 decision 16** locked: process restart / resume → **Normal** unless user re-selects; **persist across restart = Never (live session only)**. Spec 01 prose matched that. Product **Plan** mode, however, already persists via `plan_mode.json`.
 
 **Options:**
 
 | Option | Pros | Cons |
 |--------|------|------|
-| **A. Persist** (recommended) | Matches plan UX; Heavy sessions resume cleanly | Diverges from early research prose |
-| B. Session-lifetime only | Closer to original spec | Surprising loss on resume |
+| **A. Persist** (**frozen**) | Matches plan UX; Heavy sessions resume cleanly | **Deliberate override of Spec 10 decision 16** |
+| B. Session-lifetime only | Keeps Spec 10 decision 16 | Surprising loss on resume vs plan mode |
 
-**Proposal:** A. Document the deliberate product choice.
+**Decision (2026-07-15):** **A — Persist** (`effort_mode.json`, restore on resume). Charter §5: Spec 10 still wins on team sizes / join / execute intent; this package records the product delivery override for persistence. Phase 2 PR-2.2 implements persist as normative (not optional).
 
 ---
 
@@ -92,4 +92,7 @@ Product should mirror **mental model** (4 vs 16 depth), not server multi-agent A
 | Date | Decision | Owner |
 |------|----------|-------|
 | 2026-07-15 | Open builtin program; Phase 1 docs in product repo | Principal + Grok |
+| 2026-07-15 | **Q1 = A Persist** — override Spec 10 decision 16 for EffortMode resume; mirror plan_mode.json | Principal (via PR review address) + Grok |
+| 2026-07-15 | Hard-stop `continue` = exactly one extra replace wave (tech spec §4.4) | Grok (Hermes freeze item) |
+| 2026-07-15 | Feature flag off must **unregister** builtin names (not only idle runtime) | Grok (Hermes freeze item) |
 | | | |

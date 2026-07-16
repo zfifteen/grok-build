@@ -7,12 +7,12 @@
 
 ## 1. Current state (skills-first v1)
 
-| Artifact | Location |
-|----------|----------|
-| Skill packages | `~/.grok/skills/{expert,heavy,normal}/SKILL.md` |
-| Design / install | `~/IdeaProjects/research/grok-build-effort-modes/` |
-| Install script | `research/.../scripts/install-effort-mode-skills.sh` |
-| PGS / agency references | `prime-gap-structure/AGENTS.md`, agency STATE |
+| Artifact | Location (portable) | Operator workstation (Velocity Works) |
+|----------|---------------------|----------------------------------------|
+| Skill packages | User skills dir: `~/.grok/skills/{expert,heavy,normal}/` (or project `.grok/skills/`) | Same layout on principal machine |
+| Design / install archive | External research tree **not vendored** in this repo | e.g. `IdeaProjects/research/grok-build-effort-modes/` |
+| Install script | `scripts/install-effort-mode-skills.sh` in that research tree | Same |
+| Downstream consumers | Project `AGENTS.md` / ops docs that reference `/expert` `/heavy` | e.g. PGS / agency continuity |
 
 Behavior is **policy-enforced** by the model following skill text. Sticky mode is best-effort. No shell mode bit.
 
@@ -104,10 +104,24 @@ Builtins close those gaps.
 
 ---
 
-## 8. Rollback
+## 8. Rollback (feature flag — normative)
 
-If builtins regress:
+Recommended kill switch: **`effort_mode_builtins`** (name illustrative; wire to product config/env).
 
-1. Feature-flag effort builtins off (recommended kill switch).  
-2. Skills remain installed → previous policy behavior returns for slash.  
-3. Keep tracker behind flag so Normal path is identical to today.
+### When flag is **on** (ship default after Phase 2+)
+
+- `/expert` `/heavy` `/normal` are registered builtins.  
+- Shell `resolve()` matches builtins **before** skill parse (`resolve_builtin_shadows_same_named_skill` pattern).  
+- Skills of the same name do **not** run.
+
+### When flag is **off** (rollback)
+
+Turning the flag off is **not** “idle the tracker but leave the three names in `BUILTIN_COMMANDS`.” That would **brick** the skills fallback forever, because builtins always win name resolution.
+
+Flag-off **must**:
+
+1. **Omit** `expert` / `heavy` / `normal` from the effective builtin table used by `resolve` and autocomplete (`available_commands` / `allows` must not advertise them). Prefer compile-time or runtime filtering so the names are absent from the builtin match path entirely.  
+2. **Idle** any `EffortModeTracker` / effort runtime so the Normal path is identical to pre-feature builds (no policy inject, no hard gates).  
+3. Leave skill packages installed (if present) so slash can fall through to **skills** again on hosts that still use skills-first.
+
+Only then does “skills return for slash” hold. Document this in code comments next to the three `BuiltinCommand` entries when implemented.
