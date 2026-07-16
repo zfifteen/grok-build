@@ -1,9 +1,9 @@
 # Powergrok Branding Plan: "Power Grok" Label Changes
 
-**Status:** Draft (Phase 0 — Planning)  
+**Status:** Revised & Approved (Phase 0 — Planning, post self-review)  
 **Date:** 2026-07-16  
 **Branch:** `feat/branding-powergrok` (this document)  
-**Product Context:** This is the `zfifteen/powergrok` fork. The goal is to brand the product as **Power Grok** where it makes sense for user-facing labels, while preserving technical isolation, official Grok compatibility, and upstream alignment.
+**Product Context:** This is the `zfifteen/powergrok` fork. The goal is to brand the product as **Power Grok** where it makes sense for user-facing labels, while preserving technical isolation, official Grok compatibility, upstream alignment, and the existing Powergrok product contract in `BUILD_PLAN.md`.
 
 **Related:** `docs/powergrok/BUILD_PLAN.md` (core isolation contract), `docs/effort-modes-builtin/` (other Powergrok-unique features), `AGENTS.md` (branch discipline).
 
@@ -21,7 +21,7 @@
 | B6 | Version string | Keep stock binary `--version`. Add optional Powergrok suffix in wrapper or VERSION file only (e.g. "Power Grok build from SHA..."). |
 | B7 | Coexistence language | Always clarify "Power Grok (parallel install of Grok Build)" in docs to avoid confusion with official `grok`. |
 
-**Hard rule:** Never break official `grok` behavior or isolation (`.grok/` vs `.powergrok/`). Changes must be surgical.
+**Hard rule (reinforced post-review):** All changes must be **guarded** (e.g. `if is_powergrok()`) or limited to Powergrok-specific files (`docs/powergrok/`, wrapper, effort-modes docs). Never edit core upstream user-guide files that official binaries load. Changes are **additive/conditional**, not destructive.
 
 ---
 
