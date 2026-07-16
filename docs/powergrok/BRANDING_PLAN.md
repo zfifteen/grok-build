@@ -1,27 +1,32 @@
 # Powergrok Branding Plan: "Power Grok" Label Changes
 
-**Status:** Revised & Approved (Phase 0 — Planning, post self-review)  
+**Status:** Revised & Amended (Phase 0 — Planning, post Gemini adversarial review)  
 **Date:** 2026-07-16  
 **Branch:** `feat/branding-powergrok` (this document)  
 **Product Context:** This is the `zfifteen/powergrok` fork. The goal is to brand the product as **Power Grok** where it makes sense for user-facing labels, while preserving technical isolation, official Grok compatibility, upstream alignment, and the existing Powergrok product contract in `BUILD_PLAN.md`.
 
-**Related:** `docs/powergrok/BUILD_PLAN.md` (core isolation contract), `docs/effort-modes-builtin/` (other Powergrok-unique features), `AGENTS.md` (branch discipline).
+**Related:** `docs/powergrok/BUILD_PLAN.md` (core isolation contract), `docs/powergrok/BRANDING_PLAN_REVIEW.md` (Gemini adversarial review — all findings incorporated below), `docs/effort-modes-builtin/` (other Powergrok-unique features), `AGENTS.md` (branch discipline).
 
 ---
 
-## 0. Locked Branding Decisions
+## 0. Locked Branding Decisions (amended after Gemini adversarial review)
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| B1 | Primary product name | **Power Grok** (two words in prose/UI) |
-| B2 | Command / binary | Remains **`powergrok`** (lowercase, one word) — do not change (matches existing wrapper, argv0 logic, and isolation) |
-| B3 | Code identifiers | Keep `powergrok`, `.powergrok/`, `GROK_HOME` (when referring to the env var), `xai-grok-*` crate names (upstream) |
-| B4 | Scope of change | **User-facing labels only**: TUI chrome, help text, READMEs, docs, welcome messages, version output notes, error messages, skill/agent descriptions. **Do not** touch official Grok paths, upstream strings that affect compatibility, or core engine identifiers. |
-| B5 | Logo / visual | No change in v1 (reuse Grok Build / xAI assets or add simple "Power Grok" text badge). Future phase may add custom imagery. |
-| B6 | Version string | Keep stock binary `--version`. Add optional Powergrok suffix in wrapper or VERSION file only (e.g. "Power Grok build from SHA..."). |
-| B7 | Coexistence language | Always clarify "Power Grok (parallel install of Grok Build)" in docs to avoid confusion with official `grok`. |
+| B1 | Primary product name | **Power Grok** (two words in prose, titles, and UI chrome) |
+| B2 | Command / binary | Remains **`powergrok`** (lowercase, one word) — do not change (matches existing wrapper, argv0 logic, isolation contract, and `BUILD_PLAN.md` D2/G1) |
+| B3 | Code identifiers | Keep `powergrok`, `.powergrok/`, `GROK_HOME`, `xai-grok-*` crates, and all path literals. Branding state **must not rely solely on argv0**. |
+| B4 | Scope of change | **User-facing labels only** (TUI, help, docs, welcome messages, error strings, effort-mode chrome). **Surgical updates only** — never mutate strings that the official `grok` binary relies on. |
+| B5 | Logo / visual | No change in v1 (reuse existing Grok Build / xAI assets; optional text "Power Grok" badge). Visual rebrand is deferred. |
+| B6 | Version string | Keep stock binary `--version`. Append Powergrok context **only** in wrapper output or `~/.local/lib/powergrok/VERSION` (e.g. "Power Grok (built from SHA...)"). |
+| B7 | Coexistence language | **Mandatory** in all updated docs and messages: "Power Grok — a parallel, source-built installation of Grok Build that coexists with the official `grok`". |
+| **B8 (new)** | Branding detection mechanism | Dedicated `POWERGROK_BRANDING=1` env var set by wrapper (plus compile-time `powergrok` feature flag). `argv0` is **supplementary only**. |
+| **B9 (new)** | Documentation strategy | Maintain a minimal set of Powergrok-specific overrides/patches (build-time or runtime via structured mechanism, **not** naive regex). Do not duplicate entire user guide. |
+| **B10 (new)** | Style & CI gate | Strict style guide ("Power Grok" = product, "powergrok" = binary/branch). Automated test that asserts "Power Grok" in `--help`, TUI header, and effort chrome. One-time `rg` audit is **insufficient** — must produce ongoing CI check. |
 
-**Hard rule (reinforced post-review):** All changes must be **guarded** (e.g. `if is_powergrok()`) or limited to Powergrok-specific files (`docs/powergrok/`, wrapper, effort-modes docs). Never edit core upstream user-guide files that official binaries load. Changes are **additive/conditional**, not destructive.
+**Hard rule (post-Gemini):** All branding logic must be **isolated** behind feature flags (`powergrok`), wrapper env vars (`POWERGROK_BRANDING=1`), or dedicated adapters. Inline `if is_powergrok()` conditionals in upstream TUI/CLI code are prohibited due to merge-conflict debt. Every upstream sync must remain low-friction.
+
+**Style guide (B10):** "Power Grok" = the product the user runs. "powergrok" = the binary name, branch, directory, and code identifier. The plan and all future docs have been refactored to follow this consistently (review point 5).
 
 ---
 
@@ -32,6 +37,8 @@ This effort updates visible branding from generic "Grok Build" / "Grok" referenc
 Power Grok is already a distinct binary (`powergrok`), user home (`~/.powergrok`), and project tree (`.powergrok/`). Branding updates will make the TUI, documentation, and help text reflect the product identity consistently.
 
 This is **not** a full fork rename (we remain a source-built variant of upstream Grok Build). Official upstream strings and paths that power the official `grok` binary must remain unchanged.
+
+**Post-review amendments (incorporated from `BRANDING_PLAN_REVIEW.md`):** All five Gemini findings have been addressed via new locked decisions **B8–B10**, updated technical approach (feature flags + wrapper `POWERGROK_BRANDING=1` env var preferred over fragile inline `argv0` conditionals), mandatory CI regression tests for branding, explicit structured documentation override strategy, and strict style guide enforcement ("Power Grok" vs "powergrok"). Merge-conflict debt and long-term upstream sync friction are now treated as first-class risks.
 
 **Expected outcome:** Running `powergrok` shows "Power Grok" in title, status, help, and docs. Official `grok` is untouched.
 
@@ -81,20 +88,23 @@ This is **not** a full fork rename (we remain a source-built variant of upstream
 - Any string inside the official binary that would affect `grok` command.
 - Third-party notices, licenses, or xAI/SpaceXAI logos (unless adding Power Grok badge).
 
-**Phase 1 gate:** Exhaustive `rg` audit of `"Grok"`, `"Grok Build"`, `grok` (case-sensitive where UI) with documented **allowlist** of untouched references (similar to BUILD_PLAN G3).
+**Phase 1 gate (strengthened per review):** Exhaustive `rg` audit of `"Grok"`, `"Grok Build"`, `grok` (case-sensitive where UI) with documented **allowlist** of untouched references (similar to BUILD_PLAN G3). **This audit must produce an automated CI test** that runs on every build/PR (asserts "Power Grok" appears in `--help`, TUI header, effort chrome, and that unauthorized "Grok Build" strings are absent under Powergrok branding). One-time manual audit is insufficient (review point 3).
 
 ---
 
 ## 5. Technical Approach
 
-### 5.1 Centralization (Recommended)
-Introduce helpers where feasible (new or extend existing):
+### 5.1 Centralization & Detection (Revised per Review)
 
-- In `xai-grok-config` or a new `powergrok-branding` leaf: `product_name()` / `product_brand()` that returns `"Power Grok"` when argv0 is `powergrok`.
-- TUI chrome: extend `apply_effort_mode_chrome` style updates or add `apply_branding()`.
-- Prompt injection / system reminders: conditional "You are Power Grok, a parallel install of Grok Build...".
+**Preferred mechanism (B8):** The install wrapper sets `POWERGROK_BRANDING=1`. Combine with a compile-time Cargo feature flag (`powergrok`) that enables branding code paths. This eliminates fragile runtime `argv0` checks in core TUI/CLI logic (addressing review points 1 & 2).
 
-Fallback to "Grok Build" for official paths.
+- Add `product_brand()` / `is_powergrok_branding()` helpers in `xai-grok-config` (or a thin adapter crate) that respect the env var + feature flag.
+- **No inline `if is_powergrok()`** in upstream TUI rendering, clap builders, or shared string formatters. Use adapters or conditional compilation.
+- TUI chrome: extend via dedicated `apply_branding_chrome()` (mirroring effort mode updates).
+- Prompt injection / system reminders: use the helper to inject "You are Power Grok...".
+- Documentation (B9): Use build-time templating or a minimal structured patch file applied when rendering user-guide content under Powergrok (avoid runtime regex).
+
+This design ensures low merge-conflict cost on upstream syncs.
 
 ### 5.2 String Strategy
 - Prefer **"Power Grok"** in prose and titles.
@@ -177,7 +187,7 @@ Plus full `cargo test`, `cargo check -p xai-grok-pager-bin`, and manual TUI smok
 
 **This plan lives alongside `BUILD_PLAN.md` as the canonical reference for Powergrok product identity.**
 
-*Last updated: 2026-07-16 — Initial draft on `feat/branding-powergrok`.*
+*Last updated: 2026-07-16 — Revised after Gemini adversarial review (`BRANDING_PLAN_REVIEW.md`). All 5 findings incorporated (feature flags + env var, CI automation, doc strategy, style guide, merge-debt mitigation).*
 
 ---
 
