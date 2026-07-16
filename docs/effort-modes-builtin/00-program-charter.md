@@ -80,9 +80,10 @@ When product architecture conflicts with research prose, **record the decision i
 | Existing feature | Why it matters |
 |------------------|----------------|
 | `PlanModeTracker` (`session/plan_mode.rs`) | Pure state machine + persistence + mid-turn transitions — **primary pattern for EffortMode** |
+| `GoalTracker` (`session/goal_tracker.rs`) | Second pure SessionActor twin — history/cap/wire-hardening patterns for ledgers |
 | ACP `SessionMode` (`Default` / `Plan` / `Ask`) | Prompt/plan dimension — keep **orthogonal** to EffortMode |
-| `BUILTIN_COMMANDS` (`session/slash_commands.rs`) | Registration, gates, `BuiltinAction` resolution |
-| Skill slash resolution (`InvokeSkill`) | Current skill path; must lose name collision to builtins |
+| `BUILTIN_COMMANDS` (`session/slash_commands.rs`) | Registration, gates, `BuiltinAction` resolution; flag-off must omit effort names |
+| Skill slash resolution (`InvokeSkill`) | Current skill path; loses when builtins registered; reclaims when flag unregisters names |
 | Builtin subagents (`explore`, `general-purpose`, `plan`) | Roster building blocks for fixed teams |
 | Subagent spawn/wait tools | Join contract implementation surface |
 

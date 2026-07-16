@@ -44,7 +44,7 @@ Does **not** control:
 
 - Always-approve / yolo  
 - Plan mode write gates  
-- Model picker catalog (grok.com “modes” in `chat_modes.rs` are unrelated)
+- Model picker catalog (grok.com “modes” in `crates/codegen/xai-grok-shell/src/agent/chat_modes.rs` are unrelated)
 
 ### 2.2 Orthogonality matrix
 
@@ -82,9 +82,11 @@ Register in `BUILTIN_COMMANDS` (same module as `compact`, `always-approve`, …)
 | `heavy` | — | optional task | `SetEffortMode { Heavy }` + optional prompt |
 | `normal` | — | none / ignored | `SetEffortMode { Normal }`; cancel in-flight team |
 
-**Name resolution:** builtins resolve **before** skill slash tokens so product wins over `~/.grok/skills/{expert,heavy,normal}`.
+**Name resolution:** builtins resolve **before** skill slash tokens so product wins over same-named skills (user or project skill packages named `expert` / `heavy` / `normal`). See [05-skills-coexistence-and-migration.md](./05-skills-coexistence-and-migration.md) for the feature-flag kill switch (must unregister names, not only idle runtime).
 
-**Gates:** `BuiltinGate::AlwaysOn` for all three (or a dedicated gate if subagents missing → still allow mode set, warn on team run).
+**Gates:** `BuiltinGate::AlwaysOn` for all three when the feature is on (or a dedicated gate if subagents missing → still allow mode set, warn on team run). When `effort_mode_builtins` is **off**, the three names must **not** appear in resolve/autocomplete (skills may reclaim slash).
+
+**Arg parse order:** the slash resolver strips flags from the raw args string **before** constructing `BuiltinAction`. In particular, leading `--solo` is parsed into `solo: true` and removed from the remaining task text during `BuiltinCommand` resolve (same place as other arg splits), not later by the model.
 
 ### 3.2 TUI chrome
 
@@ -100,10 +102,10 @@ Mirror plan-mode update patterns (`enqueue_current_mode_update` analogue or dedi
 
 Allow single-agent Expert/Heavy only if:
 
-- args include `--solo`, or  
-- user explicitly forbids subagents / requests solo  
+- args include `--solo` (parsed at slash resolve into `BuiltinAction::SetEffortMode.solo`; stripped from task text), or  
+- user explicitly forbids subagents / requests solo in natural language on **that** user message  
 
-Strip leading `--solo` from task text. Natural language from the **model** is not a waiver.
+Natural language from the **model** is not a waiver.
 
 ### 3.4 Trivial short-circuit
 
@@ -122,10 +124,29 @@ Hard research, architecture, audits, multi-file work: **never** trivial.
 5. **Ledger** — slot, role, task_id, status, counts_toward_N, rewaits, replaces.  
 6. **Replace** — max 1 replace/slot, max 2 replace waves/turn; one-for-one only.  
 7. **Contrarian (Heavy)** — ≥1 successful contrarian; if missing, vacate a non-contrarian slot and replace (never N+1).  
-8. **Hard-stop** if still short → show ledger; offer `--solo` / `continue` / `/normal`.  
+8. **Hard-stop** if still short → show ledger; offer `--solo` / `continue` / `/normal` (see §4.4).  
 9. **Synthesize** — only success rows; residual risks; cite slots.  
 10. **Execute** — leader or one post-N implementer **outside** N, only if code requested and Plan allows.  
 11. **Verify** — after execute when code changed.
+
+### 4.4 Hard-stop user choices (normative)
+
+When replace budgets are exhausted and `successful_count < N` while still `Pursuing`, the runtime **hard-stops**: no further automatic replace waves until the user chooses. User-visible copy must show the ledger and `successful_count=S of N`.
+
+| Choice | Semantics |
+|--------|-----------|
+| **`--solo` / solo** | Enter `Waived` for this turn; finish with the successes already in hand; label answer partial/solo. No more replace waves. |
+| **`continue`** | Exactly **one** additional replace wave under the **same** per-slot caps already defined (§4 step 6). After that wave joins, re-check: if still short → hard-stop again (user may choose again). `continue` is **not** unlimited; each invocation buys one wave only. |
+| **`/normal`** | Clear EffortMode; cancel remaining specialists; abandon full-team claim; Normal behavior thereafter (see §4.3). |
+
+**Interactions:**
+
+- **Abort** (user stop mid-team) takes precedence over hard-stop prompts: freeze ledger → `PartialReport`; do not offer `continue` for that team run.  
+- **`/normal` mid-flight** clears mode and cancels team; any pending hard-stop UI is withdrawn.  
+- **`--solo` after hard-stop** does not re-enter `Pursuing` for that turn.  
+- Claiming a full-team Expert/Heavy completion while `successful_count < N` remains **forbidden**.
+
+Test plan **T-A2** binds to this table (`continue` = one extra replace wave only).
 
 ### 4.1 Successful specialist (counts toward N)
 
@@ -154,20 +175,19 @@ Clear effort mode **and** cancel team (same spirit as Normal skill Spec 14). Aba
 
 ## 5. Persistence
 
-**Recommended (align with PlanModeTracker):**
+**Frozen (Phase 1 — Q1 = A):** EffortMode **persists across session resume** like plan mode.
 
-- Persist `EffortMode` (+ optional last ledger summary) under session directory, e.g. `effort_mode.json`.  
-- Restore on session resume.  
+- Write `effort_mode.json` under the session directory (mirror `plan_mode.json` / `PlanModeTracker` snapshot patterns).  
+- Restore mode (and optional last ledger summary) on session reload/resume.  
+- Compact: keep mode; optionally inject compact-safe synthesis summary for in-flight work.
 
-**Research Spec 01 note:** original design said “mode does not restore across process restarts.” Product already persists plan mode. **Proposal:** persist EffortMode across resume (better UX); document in open questions if principal prefers session-lifetime-only.
-
-Compact: keep mode; optionally inject compact-safe synthesis summary for in-flight work.
+**Conflict with research Spec 10:** Spec 10 decision 16 locked *no* restore across process restarts (live session only). This product package **deliberately overrides** that locked behavioral item for UX parity with plan mode and Heavy continuity. Charter conflict rules: record in [06-open-questions.md](./06-open-questions.md) decision log (done). Spec 10 still governs team sizes, join/execute ordering, and related orchestration intent.
 
 ---
 
 ## 6. Configuration
 
-v1 profiles (optional config, defaults hard-coded):
+v1 profiles (optional config; **defaults are the DoD constants**):
 
 | Key | Expert default | Heavy default |
 |-----|----------------|---------------|
@@ -179,6 +199,8 @@ v1 profiles (optional config, defaults hard-coded):
 | `join_timeout_ms` | ≥300000 | ≥300000 |
 
 Config validation clamps illegal values. Soft cost budgets warn only in early phases.
+
+**API rule:** hardcoded `EffortMode::team_size()` helpers return the **default DoD sizes** (4 / 16). Any user/config override must go through an `EffortConfig` (or equivalent) argument, e.g. `team_size(&self, cfg: &EffortConfig) -> Option<usize>`, and must not silently exceed defaults without an explicit experimental flag (see Q9).
 
 ---
 
@@ -195,7 +217,8 @@ pub enum EffortMode {
 }
 
 impl EffortMode {
-    pub fn team_size(self) -> Option<usize> {
+    /// Default DoD sizes only. Prefer `team_size_for(&EffortConfig)` when config exists.
+    pub fn team_size_default(self) -> Option<usize> {
         match self {
             Self::Normal => None,
             Self::Expert => Some(4),
@@ -207,16 +230,19 @@ impl EffortMode {
     }
 }
 
+// When config lands:
+// fn team_size_for(mode: EffortMode, cfg: &EffortConfig) -> Option<usize>
+
 pub struct EffortModeTracker { /* mode, pursuit, ledger, ... */ }
 ```
 
-Slash:
+Slash (after arg parse; `--solo` already stripped from `task`):
 
 ```rust
 BuiltinAction::SetEffortMode {
     mode: EffortMode,
-    task: Option<String>, // remaining args after flags
-    solo: bool,
+    task: Option<String>, // remaining args after flag parse
+    solo: bool,           // set by resolve when --solo present
 }
 ```
 

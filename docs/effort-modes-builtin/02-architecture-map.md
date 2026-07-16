@@ -54,21 +54,25 @@ User slash  →  shell BuiltinCommand  →  BuiltinAction::SetEffortMode
 - Add `BuiltinCommand` entries: `expert`, `heavy`, `normal`.  
 - Extend `BuiltinAction` with `SetEffortMode { … }`.  
 - Implement `command_name` / `args_provided` arms.  
-- Confirm advertising order and skill collision: builtins must resolve first (verify in resolve path next to `InvokeSkill`).
+- Confirm advertising order and skill collision: builtins must resolve first (existing `resolve_builtin_shadows_same_named_skill` pattern). Gate the three names on `effort_mode_builtins` so flag-off omits them from resolve/autocomplete.
 
 **Related:** `session/commands.rs`, `session/acp_session_impl/slash_exec.rs` — dispatch handlers for new action.
 
-### 3.2 Session state machine (primary design twin)
+### 3.2 Session state machines (design twins)
 
-**File:** `crates/codegen/xai-grok-shell/src/session/plan_mode.rs`
+**Primary twin:** `crates/codegen/xai-grok-shell/src/session/plan_mode.rs` (`PlanModeTracker`)
 
 Pattern to copy:
 
 - Pure tracker, no I/O  
 - Explicit state enum + transitions  
 - Snapshot struct for disk  
-- Mid-turn enter/exit  
+- Mid-turn enter/exit + write-gate coupling lessons  
 - SessionActor owns tracker behind mutex  
+
+**Second twin:** `crates/codegen/xai-grok-shell/src/session/goal_tracker.rs`
+
+Also a pure FSM “modeled after `PlanModeTracker`”, SessionActor-owned, with snapshot persistence and careful unknown-wire deserialization. Use goal’s **history/cap/wire-hardening** patterns when effort ledgers and optional ACP wire fields grow — not only plan’s mid-turn enter/exit.
 
 **New file (proposed):** `crates/codegen/xai-grok-shell/src/session/effort_mode.rs`
 
