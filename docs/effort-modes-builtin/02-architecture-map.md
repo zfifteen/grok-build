@@ -2,7 +2,7 @@
 
 **Status:** Phase 1 draft  
 **Date:** 2026-07-15  
-**Repo:** this tree (`zfifteen/grok-build`)
+**Repo:** this tree (`zfifteen/powergrok`)
 
 Maps Effort Mode work onto **existing** crates. Paths are relative to repo root.
 

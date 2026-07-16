@@ -2,7 +2,7 @@
 
 **Program:** Promote Expert / Heavy / Normal from skills-first v1 into **first-party shell + TUI builtins**.  
 **Phase 1 (this package):** documentation only — tech specs, architecture map, implementation plan, test plan, migration, open questions.  
-**Status:** Phase 1 draft opened 2026-07-15 in product source (`zfifteen/grok-build` clone).  
+**Status:** Phase 1 draft opened 2026-07-15 in product source (`zfifteen/powergrok` clone).  
 **Product cwd:** this repository root.
 
 ## Why this exists

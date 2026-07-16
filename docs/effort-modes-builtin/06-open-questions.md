@@ -71,7 +71,7 @@ Research deferred headless flags.
 
 ## Q8 — Upstream contribution vs private fork
 
-This clone is public `zfifteen/grok-build`. Contribution path (PR upstream vs fork features) is a **principal** decision; docs assume local product work first.
+This clone is public `zfifteen/powergrok`. Contribution path (PR upstream vs fork features) is a **principal** decision; docs assume local product work first.
 
 ---
 
