@@ -43,19 +43,42 @@ pub fn is_powergrok_branding() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
-    fn test_product_name() {
-        // Note: full test coverage requires setting env var or building with
-        // the feature. These are smoke tests for the fallback path.
-        let name = product_name();
-        assert!(name == "Power Grok" || name == "Grok Build");
+    fn test_product_name_fallback() {
+        // When neither env var nor feature is active, we must fall back to upstream name.
+        // This test is skipped under the powergrok feature (the other test covers it).
+        #[cfg(not(feature = "powergrok"))]
+        {
+            let name = product_name();
+            assert_eq!(name, "Grok Build");
+        }
+        #[cfg(feature = "powergrok")]
+        {
+            // Under powergrok feature the fallback test is superseded by test_product_name_with_feature_flag.
+        }
     }
 
     #[test]
-    fn test_is_powergrok_branding_fallback() {
-        // In normal builds this returns false; in powergrok builds it returns true.
-        // The real test is done via the CI branding test (B10).
-        let _ = is_powergrok_branding();
+    #[serial] // Env var test must not run concurrently with other tests that set it.
+    fn test_product_name_with_env_var() {
+        // Primary signal from install wrapper.
+        unsafe {
+            std::env::set_var("POWERGROK_BRANDING", "1");
+        }
+        let name = product_name();
+        unsafe {
+            std::env::remove_var("POWERGROK_BRANDING");
+        }
+        assert_eq!(name, "Power Grok");
+    }
+
+    #[test]
+    #[cfg(feature = "powergrok")]
+    fn test_product_name_with_feature_flag() {
+        // Secondary compile-time path (used by powergrok builds).
+        let name = product_name();
+        assert_eq!(name, "Power Grok");
     }
 }

@@ -13071,6 +13071,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "serial_test",
  "shellexpand",
  "tempfile",
  "thiserror 2.0.18",
