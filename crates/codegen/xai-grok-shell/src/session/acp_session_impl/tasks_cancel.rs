@@ -258,6 +258,9 @@ impl SessionActor {
             self.cancel_running_turn_subagents();
         }
 
+        // Effort-mode hard runtime: freeze specialist ledger → PartialReport S/N.
+        self.effort_on_user_cancel();
+
         // Don't count send-now/rewound cancels — they'd skew the cancel-rate signal.
         if !rewind_if_pristine && trigger.as_deref() != Some("send_now") {
             self.signals_handle().record_cancellation();

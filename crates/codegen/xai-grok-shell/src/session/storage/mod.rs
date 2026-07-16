@@ -564,6 +564,13 @@ pub trait StorageAdapter: Send + Sync {
         state: &crate::session::plan_mode::PlanModeSnapshot,
     ) -> io::Result<()>;
 
+    /// Write/update effort mode sticky state
+    async fn write_effort_mode_state(
+        &self,
+        info: &Info,
+        state: &crate::session::effort_mode::EffortModeSnapshot,
+    ) -> io::Result<()>;
+
     /// Write/update the session signals snapshot
     async fn write_signals(&self, info: &Info, signals: &SessionSignals) -> io::Result<()>;
 

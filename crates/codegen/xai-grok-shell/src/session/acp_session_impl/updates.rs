@@ -435,6 +435,8 @@ impl SessionActor {
                         subagent_type: subagent_type.clone(),
                     },
                 );
+                // Effort-mode ledger: bind this spawn to the next free specialist slot.
+                self.effort_bind_spawned_subagent(subagent_id);
                 if let Some(parent_id) = resumed_from {
                     debug_assert_ne!(parent_id, subagent_id, "subagent cannot resume itself");
                 }
@@ -568,6 +570,8 @@ impl SessionActor {
                         finished_marginal,
                     );
                 }
+                // Effort-mode join: record outcome + try full-team synthesize.
+                self.effort_on_subagent_finished(subagent_id, status.as_str());
             }
             XaiSessionUpdate::SubagentProgress {
                 subagent_id,

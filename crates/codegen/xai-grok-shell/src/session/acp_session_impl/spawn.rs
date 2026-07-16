@@ -494,6 +494,27 @@ pub(crate) async fn spawn_session_actor(
         };
         Arc::new(parking_lot::Mutex::new(tracker))
     };
+    let effort_mode = {
+        let session_dir = crate::session::persistence::session_dir(&session_info);
+        // Sticky mode restore: load effort_mode.json if present (best-effort).
+        let tracker = {
+            let path = session_dir.join("effort_mode.json");
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(snapshot) =
+                    serde_json::from_slice::<crate::session::effort_mode::EffortModeSnapshot>(&bytes)
+                {
+                    crate::session::effort_mode::EffortModeTracker::from_snapshot(
+                        session_dir, snapshot,
+                    )
+                } else {
+                    crate::session::effort_mode::EffortModeTracker::new(session_dir)
+                }
+            } else {
+                crate::session::effort_mode::EffortModeTracker::new(session_dir)
+            }
+        };
+        Arc::new(parking_lot::Mutex::new(tracker))
+    };
     let goal_tracker = {
         let session_dir = crate::session::persistence::session_dir(&session_info);
         let tracker = if let Some(snapshot) = persisted_goal_mode {
@@ -1249,6 +1270,7 @@ pub(crate) async fn spawn_session_actor(
         turn_start_prompt_mode: parking_lot::Mutex::new(PromptMode::Agent),
         turn_prompt_mode: turn_prompt_mode.clone(),
         plan_mode: plan_mode.clone(),
+        effort_mode: effort_mode.clone(),
         goal_enabled,
         goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
         goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(false),

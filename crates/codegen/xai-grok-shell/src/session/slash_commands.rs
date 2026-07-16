@@ -30,6 +30,7 @@ pub(crate) struct BuiltinCommand {
 ///   disabled). Used for `/memory` so the user can re-enable via toggle.
 /// - `Goal`: `resolve_goal()` feature flag is on AND `update_goal` is in the
 ///   session toolset (see `goal_slash_and_harness_available` in `acp_session.rs`).
+/// - `EffortMode`: `effort_mode_builtins` feature (`GROK_EFFORT_MODE_BUILTINS`, default on).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuiltinGate {
     AlwaysOn,
@@ -42,6 +43,7 @@ pub(crate) enum BuiltinGate {
     Hooks,
     Plugins,
     Goal,
+    EffortMode,
 }
 
 /// All built-in slash commands. Order here = display order in autocomplete.
@@ -58,6 +60,48 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
             } else {
                 Some(args.to_string())
             },
+        },
+    },
+    BuiltinCommand {
+        name: "expert",
+        description: "Set sticky Expert effort mode (N=4 analytic team for non-trivial work)",
+        argument_hint: Some("[--solo] optional task"),
+        aliases: &[],
+        gate: BuiltinGate::EffortMode,
+        resolve: |args| {
+            let (solo, task) = crate::session::effort_mode::parse_solo_and_task(args);
+            BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                task,
+                solo,
+            }
+        },
+    },
+    BuiltinCommand {
+        name: "heavy",
+        description: "Set sticky Heavy effort mode (N=16 analytic team + contrarian)",
+        argument_hint: Some("[--solo] optional task"),
+        aliases: &[],
+        gate: BuiltinGate::EffortMode,
+        resolve: |args| {
+            let (solo, task) = crate::session::effort_mode::parse_solo_and_task(args);
+            BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Heavy,
+                task,
+                solo,
+            }
+        },
+    },
+    BuiltinCommand {
+        name: "normal",
+        description: "Clear effort mode to Normal and cancel in-flight specialist team",
+        argument_hint: None,
+        aliases: &[],
+        gate: BuiltinGate::EffortMode,
+        resolve: |_args| BuiltinAction::SetEffortMode {
+            mode: crate::session::effort_mode::EffortMode::Normal,
+            task: None,
+            solo: false,
         },
     },
     BuiltinCommand {
@@ -387,6 +431,8 @@ pub(crate) struct CommandAvailability {
     pub hooks: bool,
     pub plugins: bool,
     pub goal: bool,
+    /// Effort-mode builtins (`/expert` `/heavy` `/normal`).
+    pub effort_mode: bool,
 }
 
 impl CommandAvailability {
@@ -401,6 +447,7 @@ impl CommandAvailability {
             BuiltinGate::Hooks => self.hooks,
             BuiltinGate::Plugins => self.plugins,
             BuiltinGate::Goal => self.goal,
+            BuiltinGate::EffortMode => self.effort_mode,
         }
     }
 
@@ -416,6 +463,7 @@ impl CommandAvailability {
             hooks: true,
             plugins: true,
             goal: true,
+            effort_mode: true,
         }
     }
 }
@@ -588,7 +636,7 @@ pub(crate) struct ParsedSkillRef {
     pub plugin_name: Option<String>,
 }
 
-pub(super) enum SlashCommandOutcome {
+pub(crate) enum SlashCommandOutcome {
     /// Execute directly, no model round-trip.
     Builtin(BuiltinAction),
     /// One or more skills detected in user input.
@@ -605,9 +653,16 @@ pub(super) enum SlashCommandOutcome {
     },
 }
 
-pub(super) enum BuiltinAction {
+pub(crate) enum BuiltinAction {
     Compact {
         user_context: Option<String>,
+    },
+    /// Sticky effort mode (Expert / Heavy / Normal).
+    SetEffortMode {
+        mode: crate::session::effort_mode::EffortMode,
+        /// Remaining task text after `--solo` strip (empty → mode-only).
+        task: Option<String>,
+        solo: bool,
     },
     SetYolo {
         enabled: bool,
@@ -666,6 +721,18 @@ impl BuiltinAction {
     pub(crate) fn command_name(&self) -> &'static str {
         match self {
             BuiltinAction::Compact { .. } => "compact",
+            BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                ..
+            } => "expert",
+            BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Heavy,
+                ..
+            } => "heavy",
+            BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Normal,
+                ..
+            } => "normal",
             BuiltinAction::SetYolo { .. } => "yolo",
             BuiltinAction::FlushMemory => "flush",
             BuiltinAction::Dream => "dream",
@@ -698,6 +765,7 @@ impl BuiltinAction {
     pub(crate) fn args_provided(&self) -> bool {
         match self {
             BuiltinAction::Compact { user_context } => user_context.is_some(),
+            BuiltinAction::SetEffortMode { task, solo, .. } => task.is_some() || *solo,
             BuiltinAction::SetYolo { .. } => true,
             BuiltinAction::FlushMemory => false,
             BuiltinAction::Dream => false,
@@ -820,12 +888,16 @@ pub(crate) fn parse_skill_references(
             continue;
         }
 
-        // Check if it's a builtin — skip those (builtins are not multi-skill candidates).
-        let is_builtin = BUILTIN_COMMANDS
+        // Skip only builtins that are **currently available**. Gated-off
+        // builtins (e.g. effort mode with GROK_EFFORT_MODE_BUILTINS=0) must
+        // remain eligible for same-named skill reclaim.
+        let is_active_builtin = BUILTIN_COMMANDS
             .iter()
             .chain(PROMPT_COMMANDS.iter())
-            .any(|b| b.name == word || b.aliases.contains(&word));
-        if is_builtin {
+            .any(|b| {
+                (b.name == word || b.aliases.contains(&word)) && availability.allows(b.gate)
+            });
+        if is_active_builtin {
             i = end;
             continue;
         }
@@ -957,9 +1029,85 @@ pub(super) async fn build_skill_information_for_refs(
     Some(build_skill_information(&skill_blocks, &refs))
 }
 
+/// Outcome of resolving a user prompt through the real slash-command pipeline
+/// for effort-mode builtins (and collision / flag-off fallthrough).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffortSlashResolve {
+    /// Built-in `/expert` `/heavy` `/normal` matched.
+    Builtin {
+        mode: crate::session::effort_mode::EffortMode,
+        task: Option<String>,
+        solo: bool,
+    },
+    /// Skill invoke when the effort gate is off and a same-named skill exists.
+    Skill { name: String },
+    /// Not an effort slash / pass-through ordinary prompt.
+    PassThrough,
+}
+
+/// Resolve `/{expert|heavy|normal}…` through the **shipped**
+/// [`resolve`] + `BUILTIN_COMMANDS` path (not a reimplementation).
+///
+/// Public so integration tests and headless launch checks drive the real
+/// shell resolve entry (verification plan step 4).
+pub fn resolve_effort_slash(
+    prompt: &str,
+    effort_builtins_enabled: bool,
+    same_named_skills: &[&str],
+) -> EffortSlashResolve {
+    use xai_grok_tools::implementations::skills::types::SkillScope;
+
+    let skills: Vec<SkillInfo> = same_named_skills
+        .iter()
+        .map(|name| SkillInfo {
+            name: (*name).to_string(),
+            description: format!("skill {name}"),
+            path: format!("/skills/{name}/SKILL.md"),
+            scope: SkillScope::Local,
+            user_invocable: true,
+            enabled: true,
+            ..SkillInfo::default()
+        })
+        .collect();
+
+    let availability = CommandAvailability {
+        effort_mode: effort_builtins_enabled,
+        feedback: true,
+        memory: true,
+        memory_configured: true,
+        scheduler: true,
+        hooks: true,
+        plugins: true,
+        goal: true,
+    };
+
+    let blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(
+        prompt.to_string(),
+    ))];
+
+    match resolve(
+        blocks,
+        &skills,
+        availability,
+        SkillSlashRewrite::default(),
+    ) {
+        Err(SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode { mode, task, solo })) => {
+            EffortSlashResolve::Builtin { mode, task, solo }
+        }
+        Err(SlashCommandOutcome::InvokeSkill { skills: refs, .. }) => {
+            let name = refs
+                .first()
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "unknown".into());
+            EffortSlashResolve::Skill { name }
+        }
+        Ok(_) | Err(_) => EffortSlashResolve::PassThrough,
+    }
+}
+
 /// Resolve prompt blocks as a slash command.
 /// `Ok(blocks)` = not a command, pass through. `Err(outcome)` = matched.
-pub(super) fn resolve(
+pub(crate) fn resolve(
     prompt_blocks: Vec<acp::ContentBlock>,
     skills: &[SkillInfo],
     availability: CommandAvailability,
@@ -1251,6 +1399,131 @@ mod tests {
         }
     }
 
+    // ── /expert /heavy /normal (effort modes) ───────────────────────
+
+    #[test]
+    fn expert_resolves_mode_only_and_with_task() {
+        assert!(matches!(
+            resolve_builtin("expert", ""),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                task: None,
+                solo: false,
+            })
+        ));
+        assert!(matches!(
+            resolve_builtin("expert", "fix CI"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                task: Some(ref t),
+                solo: false,
+            }) if t == "fix CI"
+        ));
+    }
+
+    #[test]
+    fn expert_parses_solo_and_strips_flag() {
+        assert!(matches!(
+            resolve_builtin("expert", "--solo fix the flaky test"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                task: Some(ref t),
+                solo: true,
+            }) if t == "fix the flaky test"
+        ));
+        assert!(matches!(
+            resolve_builtin("heavy", "--solo"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Heavy,
+                task: None,
+                solo: true,
+            })
+        ));
+    }
+
+    #[test]
+    fn heavy_and_normal_resolve() {
+        assert!(matches!(
+            resolve_builtin("heavy", "deep audit"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Heavy,
+                task: Some(ref t),
+                solo: false,
+            }) if t == "deep audit"
+        ));
+        assert!(matches!(
+            resolve_builtin("normal", "ignored"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Normal,
+                task: None,
+                solo: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn effort_builtins_resolve_via_slash_and_shadow_skills() {
+        for name in ["expert", "heavy", "normal"] {
+            let outcome = resolve(
+                vec![text_block(&format!("/{name}"))],
+                &[],
+                all_gated(),
+                SkillSlashRewrite::default(),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(outcome, SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode { .. })),
+                "expected SetEffortMode for /{name}"
+            );
+        }
+        // Builtin wins over same-named skill.
+        let skills = vec![make_skill("expert", true)];
+        let outcome = resolve(
+            vec![text_block("/expert --solo task")],
+            &skills,
+            all_gated(),
+            SkillSlashRewrite::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            outcome,
+            SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                solo: true,
+                task: Some(ref t),
+            }) if t == "task"
+        ));
+    }
+
+    #[test]
+    fn effort_mode_gate_hides_builtins_when_off() {
+        let names = advertised_names(CommandAvailability {
+            effort_mode: false,
+            ..CommandAvailability::all_enabled()
+        });
+        for n in ["expert", "heavy", "normal"] {
+            assert!(
+                !names.iter().any(|x| x == n),
+                "{n} must be hidden when effort_mode gate is off, got: {names:?}"
+            );
+        }
+        // Resolve falls through (no Builtin outcome) when gate is off.
+        let availability = CommandAvailability {
+            effort_mode: false,
+            ..CommandAvailability::all_enabled()
+        };
+        assert!(
+            resolve(
+                vec![text_block("/expert fix it")],
+                &[],
+                availability,
+                SkillSlashRewrite::default(),
+            )
+            .is_ok(),
+            "expected pass-through when EffortMode gate is off"
+        );
+    }
+
     #[test]
     fn yolo_alias_resolves_to_always_approve() {
         // /yolo should resolve via alias to the always-approve command
@@ -1510,6 +1783,9 @@ mod tests {
             names,
             [
                 "compact",
+                "expert",
+                "heavy",
+                "normal",
                 "always-approve",
                 "flush",
                 "dream",

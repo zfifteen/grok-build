@@ -750,6 +750,8 @@ pub(crate) struct SessionActor {
     /// `Arc`-shared with the notification bridge so `PlanModeEntered` /
     /// `PlanModeExited` tool notifications can transition state directly.
     pub(crate) plan_mode: Arc<parking_lot::Mutex<crate::session::plan_mode::PlanModeTracker>>,
+    /// Effort mode (Expert / Heavy / Normal) sticky session tracker.
+    pub(crate) effort_mode: Arc<parking_lot::Mutex<crate::session::effort_mode::EffortModeTracker>>,
     /// Whether goal mode (`/goal`) is enabled for this session (feature flag).
     pub(crate) goal_enabled: bool,
     /// `goal_enabled` && `update_goal` in toolset; refreshed with command availability.
@@ -1176,6 +1178,7 @@ impl SessionActor {
             hooks: self.hook_registry.borrow().is_some(),
             plugins: self.plugin_registry.borrow().is_some(),
             goal,
+            effort_mode: crate::session::effort_mode::effort_mode_builtins_enabled(),
         }
     }
     /// Names of every tool registered with the session's tool bridge.
