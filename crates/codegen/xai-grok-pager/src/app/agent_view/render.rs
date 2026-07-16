@@ -1138,6 +1138,24 @@ impl AgentView {
             }
             status.push("plan", Line::from(Span::styled("plan", plan_style)));
         }
+        // Sticky Expert/Heavy effort chrome (shell-driven; orthogonal to plan).
+        if let Some(ref effort) = self.effort_chrome {
+            let color = if effort.pursuit == "partial_report"
+                || effort.label.contains("Partial")
+                || effort.label.contains("Waived")
+            {
+                theme.warning
+            } else if effort.mode == "heavy" {
+                theme.accent_running
+            } else {
+                theme.accent_user
+            };
+            let effort_style = Style::default().fg(color).bg(theme.bg_base);
+            status.push(
+                "effort",
+                Line::from(Span::styled(effort.label.clone(), effort_style)),
+            );
+        }
         if let Some(ref goal) = self.goal_state {
             let tick = self.tasks.tick_count() as usize;
             let active_subagent_tokens: u64 = self

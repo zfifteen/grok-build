@@ -213,6 +213,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                         "/tmp/test-session",
                     )),
                 )),
+                effort_mode: std::sync::Arc::new(parking_lot::Mutex::new(crate::session::effort_mode::EffortModeTracker::new(std::path::PathBuf::from("/tmp/effort-mode-test")))),
                 goal_enabled: false,
                 goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
                 goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(false),
@@ -669,6 +670,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                         "/tmp/test-session",
                     )),
                 )),
+                effort_mode: std::sync::Arc::new(parking_lot::Mutex::new(crate::session::effort_mode::EffortModeTracker::new(std::path::PathBuf::from("/tmp/effort-mode-test")))),
                 goal_enabled: false,
                 goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
                 goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(false),
@@ -943,6 +945,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                         ),
                     ),
                 ),
+                effort_mode: std::sync::Arc::new(parking_lot::Mutex::new(crate::session::effort_mode::EffortModeTracker::new(std::path::PathBuf::from("/tmp/effort-mode-test")))),
                 goal_enabled: false,
                 goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
                 goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(
@@ -1987,6 +1990,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                         ),
                     ),
                 ),
+                effort_mode: std::sync::Arc::new(parking_lot::Mutex::new(crate::session::effort_mode::EffortModeTracker::new(std::path::PathBuf::from("/tmp/effort-mode-test")))),
                 goal_enabled: false,
                 goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
                 goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(

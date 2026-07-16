@@ -331,6 +331,39 @@ impl SessionActor {
                             }
                         }
                     }
+                    BuiltinAction::SetEffortMode {
+                        mode,
+                        task: Some(task),
+                        solo,
+                    } => {
+                        xai_grok_telemetry::session_ctx::log_event(slash_used);
+                        self.apply_effort_mode(mode, solo);
+                        let plan_active = self.plan_mode.lock().is_active();
+                        let mut blocks = Vec::new();
+                        if let Some(policy) = self.effort_mode.lock().policy_reminder(plan_active) {
+                            // Policy body is unwrapped; wrap for model visibility on
+                            // the first task turn (per-turn inject also re-applies).
+                            blocks.push(text_block(format!(
+                                "<system-reminder>\n{policy}\n</system-reminder>"
+                            )));
+                        }
+                        blocks.push(text_block(task));
+                        blocks
+                    }
+                    BuiltinAction::SetEffortMode {
+                        mode,
+                        task: None,
+                        solo,
+                    } => {
+                        xai_grok_telemetry::session_ctx::log_event(slash_used);
+                        return self
+                            .execute_builtin_slash_command(BuiltinAction::SetEffortMode {
+                                mode,
+                                task: None,
+                                solo,
+                            })
+                            .await;
+                    }
                     _ => return self.execute_builtin_slash_command(action).await,
                 }
             }
@@ -622,6 +655,12 @@ impl SessionActor {
         self.maybe_inject_mcp_connecting_reminder().await;
         self.maybe_inject_date_rollover_reminder().await;
         self.inject_plan_mode_reminders().await;
+        // Hard runtime: open fixed-team ledger for elevated non-solo work.
+        self.effort_on_turn_start(&user_message);
+        // Mandatory Expert/Heavy fan-out (shell-owned join-all) before the
+        // leader model turn — not soft policy / model-obedient spawn.
+        self.maybe_run_mandatory_effort_team(&user_message).await;
+        self.inject_effort_mode_reminders().await;
         self.inject_resumed_tasks_reminder();
         self.drain_between_turn_completions().await;
         let user_message = if user_images.is_empty() {
@@ -1294,6 +1333,9 @@ impl SessionActor {
     /// 3-streak pause unreachable. It resets on goal create / resume /
     /// clear and on a `completed: true` `update_goal`.
     pub(crate) async fn handle_turn_end(&self, turn_succeeded: bool) {
+        // Effort-mode: when all fixed specialist slots are terminal, claim +
+        // mark synthesis complete so execute tools unlock (criterion 4).
+        self.effort_on_turn_end();
         let goal_active_now = laziness_injection_active(
             self.goal_harness_enabled(),
             self.goal_tracker.lock().status(),

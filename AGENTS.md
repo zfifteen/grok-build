@@ -1,6 +1,6 @@
-# AGENTS.md — zfifteen/grok-build (Powergrok)
+# AGENTS.md — zfifteen/powergrok (Powergrok)
 
-This repository is the **zfifteen** fork of [xai-org/grok-build](https://github.com/xai-org/grok-build).  
+This repository is the **zfifteen** fork of [xai-org/grok-build](https://github.com/xai-org/grok-build), published as **[zfifteen/powergrok](https://github.com/zfifteen/powergrok)**.  
 It is the home of **Powergrok**: a source-built, side-by-side install of Grok Build that coexists with the official `grok` CLI.
 
 Agents working in this repo **must** follow the branch and release flow below.  
@@ -56,7 +56,7 @@ xai-org/grok-build (upstream)
 
 | Remote | URL (expected) | Purpose |
 |--------|----------------|---------|
-| `origin` | `https://github.com/zfifteen/grok-build.git` | This fork (product + intake) |
+| `origin` | `https://github.com/zfifteen/powergrok.git` | This fork (product + intake) |
 | `upstream` | `https://github.com/xai-org/grok-build.git` | Upstream source of truth for `main` |
 
 If `upstream` is missing:

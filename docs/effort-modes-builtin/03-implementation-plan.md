@@ -35,29 +35,29 @@ Exit:
 
 ### PR-2.1 — Shared `EffortMode` enum
 
-- Add `EffortMode { Normal, Expert, Heavy }` (shell-local first, or shared tools type if pager needs wire id).  
-- Unit tests: parse/display, team_size, requires_contrarian.
+- [x] Add `EffortMode { Normal, Expert, Heavy }` (shell-local in `session/effort_mode.rs`).  
+- [x] Unit tests: parse/display, team_size, requires_contrarian.
 
 ### PR-2.2 — `EffortModeTracker`
 
-- New `session/effort_mode.rs` pure FSM: mode set/clear, pursuit stubs, snapshot.  
-- SessionActor ownership.  
-- **Persist/restore:** Q1 is **frozen to A (persist)** — implement `effort_mode.json` mirror of plan mode (see tech spec §5 + decision log).  
-- Unit tests for transitions + snapshot round-trip.
+- [x] New `session/effort_mode.rs` pure FSM: mode set/clear, pursuit, snapshot.  
+- [x] SessionActor ownership.  
+- [x] **Persist/restore:** `effort_mode.json` via `PersistenceMsg::EffortModeState` + spawn restore.  
+- [x] Unit + integration tests for transitions + snapshot round-trip.
 
 ### PR-2.3 — Slash builtins
 
-- Register `/expert` `/heavy` `/normal` in `BUILTIN_COMMANDS` **behind** `effort_mode_builtins` (when off: names absent from resolve + autocomplete).  
-- `BuiltinAction::SetEffortMode`; parse `--solo` in resolve before constructing the action.  
-- Dispatch: update tracker; empty form → no model turn if product pattern allows (else minimal system notice); args form → enqueue prompt.  
-- Tests: resolve names, `--solo` parse, skill name collision preference, flag-off fallthrough to skills.
+- [x] Register `/expert` `/heavy` `/normal` in `BUILTIN_COMMANDS` behind `BuiltinGate::EffortMode` / `GROK_EFFORT_MODE_BUILTINS`.  
+- [x] `BuiltinAction::SetEffortMode`; parse `--solo` in resolve.  
+- [x] Dispatch: mode-only → `ok_end_turn`; args form → sticky mode + prompt.  
+- [x] Resolve tests (in-module) for names, `--solo`, skill shadow, gate-off.
 
 ### PR-2.4 — Chrome stub
 
-- Surface current EffortMode in session info / minimal pill hook.  
-- Telemetry `EffortModeToggled`.
+- [x] Telemetry span `session.effort_mode_toggled` + structured log on apply.  
+- [ ] Dedicated pager pill Event (follow-up).
 
-**Phase 2 exit:** builtins exist when flag on; sticky mode **persists on resume** (Q1=A); flag-off restores skill slash; no hard multi-agent yet (optional soft reminder only).
+**Phase 2 exit:** builtins exist when flag on; sticky mode **persists on resume** (Q1=A); flag-off restores skill slash; soft reminder on elevated turns.
 
 ---
 
@@ -65,26 +65,26 @@ Exit:
 
 ### PR-3.1 — Leader policy injection
 
-- On turn start under Expert/Heavy, inject structured effort policy (N, contrarian, execute-after-synthesis, join_all).  
-- Plan-active: inject non-writing constraint.  
-- **Use existing agent prompt APIs** in `crates/codegen/xai-grok-agent` (e.g. `PromptExtension` / system-prompt builder patterns already used for plan and other session overlays) — do not invent a one-off string concat path.
+- [x] On turn start under Expert/Heavy, inject structured effort policy via `inject_effort_mode_reminders` (same system-reminder path as plan mode).  
+- [x] Plan-active: non-writing constraint in policy + hard `PlanBlocksExecute`.
 
 ### PR-3.2 — Triviality + solo
 
-- Conservative trivial short-circuit helper + tests.  
-- Solo waiver flags on tracker for the turn.
+- [x] `is_trivial_task` helper + tests.  
+- [x] Solo waiver on tracker (`--solo` parse + `set_mode(..., solo)`).
 
 ### PR-3.3 — Soft roster guidance
 
-- Suggested 4- and 16-role briefs in policy text (from skill roster tables).  
-- Soft max-parallel guidance if product has concurrency knobs.
+- [x] N=4 / N=16 + contrarian guidance in `policy_reminder` text.  
+- [ ] Soft max-parallel knobs (product optional; deferred).
 
 ### PR-3.4 — Transparency
 
-- Encourage / structure ledger output in leader synthesis template.  
-- Link to subagent inspect UI.
+- [x] `progress_label` S of N for partial/abort UX.  
+- [x] Full sticky TUI chrome: `EffortModeUpdated` + pager status chip (mode + S of N + Partial/Waived).  
+- [ ] Subagent inspect UI link (optional follow-up).
 
-**Phase 3 exit:** behavior ≈ high-quality skills, but shell-owned mode + chrome; still largely model-obedient.
+**Phase 3 exit:** shell-owned mode + soft policy + hard execute gate; team spawn still model-obedient.
 
 ---
 
@@ -92,29 +92,30 @@ Exit:
 
 ### PR-4.1 — Ledger + join service
 
-- Record every specialist slot.  
-- Join-all with re-wait ≤1; success definition from tech spec.  
-- Unit tests with fake task handles.
+- [x] Record every specialist slot (`SpecialistLedgerRow`).  
+- [x] Join-all success criteria pure (`can_claim_full_team`); re-wait ≤1 cap fields.  
+- [x] Integration tests with fake task_ids (no live N).
 
 ### PR-4.2 — Replace caps + hard-stop
 
-- Enforce replace budgets; hard-stop UX (message to user).  
-- Forbidden: silent under-count full-team finalize.
+- [x] Replace budgets + hard-stop continue one extra wave.  
+- [x] Under-count finalize forbidden (`UnderCount` / `MissingContrarian`).
 
 ### PR-4.3 — Heavy contrarian invariant
 
-- Detect contrarian success; repair via slot replace.
+- [x] Detect contrarian among successes; fail closed without it.
 
 ### PR-4.4 — Execute ordering gate
 
-- Block or warn leader file-mutating tools until synthesis complete for the team run (design carefully vs normal tools).  
-- Post-N implementer labeled outside N.
+- [x] Block `AccessKind::Edit` until synthesis (and under plan+effort).  
+- [x] Post-N implementer registration (`outside_n`).
 
 ### PR-4.5 — Abort / mid-flight normal
 
-- Wire user cancel and `/normal` to abort FSM + partial report path.
+- [x] `abort_team` → PartialReport; `/normal` → `clear_to_normal`.
 
-**Phase 4 exit:** B3–B9 acceptance IDs green in automated tests with mocked subagents.
+**Phase 4 exit (updated):** B3–B9 green via pure FSM + integration tests.  
+**Live mandatory fan-out:** shell-owned `maybe_run_mandatory_effort_team` (Expert N=4 / Heavy N=16) spawns + join-all before the leader model turn; team spawn is no longer model-obedient soft policy.
 
 ---
 

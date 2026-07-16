@@ -899,6 +899,31 @@ pub enum SessionUpdate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         usage: Option<PromptUsage>,
     },
+    /// Sticky Expert/Heavy/Normal effort-mode chrome for the TUI status bar.
+    ///
+    /// Sibling to plan `CurrentModeUpdate` — does **not** overload ACP
+    /// `SessionMode` Plan/Ask/Default. Emitted whenever shell effort state
+    /// changes (slash apply, team begin, specialist finish, abort, `/normal`).
+    /// `label` is the preformatted chip text from
+    /// [`crate::session::effort_mode::format_effort_chrome_label`]; `None`
+    /// means Normal (clear elevated chrome).
+    EffortModeUpdated {
+        /// `"normal"`, `"expert"`, or `"heavy"`.
+        mode: String,
+        /// Pursuit FSM: `"idle"`, `"pursuing"`, `"aborting"`, `"partial_report"`, `"waived"`.
+        pursuit: String,
+        /// Status-bar chip text, or `None` when elevated chrome must hide.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// Successful specialist count toward N.
+        #[serde(default)]
+        successful: usize,
+        /// Target team size (4 / 16), or `None` in Normal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_n: Option<usize>,
+        #[serde(default)]
+        solo_waiver: bool,
+    },
     /// Catch-all for unrecognized session update types.
     /// Allows forward/backward compatibility when variants are added or removed.
     /// All fields from the unrecognized variant are discarded during deserialization.

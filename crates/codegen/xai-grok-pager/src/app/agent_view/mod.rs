@@ -61,6 +61,24 @@ use crate::actions::ActionId;
 use crate::key;
 use crate::render::SafeBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+/// Sticky Expert/Heavy effort status for the agent status bar.
+///
+/// Populated from shell `SessionUpdate::EffortModeUpdated`. The `label` is
+/// preformatted by the shell (`format_effort_chrome_label`) so pager and shell
+/// share one progress string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EffortChromeDisplay {
+    /// `"expert"` or `"heavy"`.
+    pub mode: String,
+    /// Pursuit FSM string from the shell.
+    pub pursuit: String,
+    /// Status-bar chip text (e.g. `Expert 2 of 4`, `Heavy Partial 3 of 16`).
+    pub label: String,
+    pub successful: usize,
+    pub target_n: Option<usize>,
+    pub solo_waiver: bool,
+}
+
 /// Hit areas for inline media buttons, rebuilt each frame.
 ///
 /// All hit areas are cleared at the start of inline media rendering and
@@ -1233,6 +1251,10 @@ pub struct AgentView {
     /// The cycle logic uses `plan_mode_pending.unwrap_or(plan_mode_active)`
     /// so rapid Shift+Tab presses advance correctly without waiting for ACP.
     pub(crate) plan_mode_pending: Option<bool>,
+    /// Sticky Expert/Heavy effort chrome from shell `EffortModeUpdated`.
+    /// `None` when Normal (elevated indicator hidden). Driven by shell
+    /// effort state, not model prose.
+    pub(crate) effort_chrome: Option<EffortChromeDisplay>,
     /// Session mode to apply once this agent's ACP session exists. Set when
     /// the agent is spawned from the dashboard with `/plan` active (the
     /// session does not exist yet, so the mode can't be sent immediately).

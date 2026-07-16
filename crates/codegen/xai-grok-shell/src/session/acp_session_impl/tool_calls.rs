@@ -905,6 +905,30 @@ impl SessionActor {
                 .await?;
             return Ok(Err(ToolLoop::Continue));
         }
+        // Effort-mode hard gate: while a fixed team is running, block
+        // write/edit tools until synthesis completes (and while Plan+Effort
+        // both demand non-writing). Read/bash/MCP still flow through.
+        if matches!(access_kind, AccessKind::Edit(_)) {
+            let plan_active = self.plan_mode.lock().is_active();
+            if let Err(gate_err) = self.effort_mode.lock().may_execute_writes(plan_active) {
+                tracing::info_span!(
+                    "tool.decision",
+                    tool_name = %call.function.name,
+                    tool_use_id = %call.id,
+                    decision = "deny",
+                    source = "effort_mode",
+                    wait_ms = 0_i64,
+                )
+                .in_scope(|| {});
+                let msg = format!(
+                    "Effort mode blocked this write: {gate_err}. Complete team synthesis \
+                     (or use /normal / --solo) before execute tools."
+                );
+                self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
+                    .await?;
+                return Ok(Err(ToolLoop::Continue));
+            }
+        }
         let tool_call_display = self
             .send_tool_call_start(&tool_call_id, &call.function.name, tool_input.clone())
             .await;

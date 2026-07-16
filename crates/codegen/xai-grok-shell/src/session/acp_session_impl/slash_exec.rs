@@ -15,6 +15,15 @@ impl SessionActor {
                 self.run_compact(user_context).await?;
                 ok_end_turn(0, None)
             }
+            // SetEffortMode with a task is intercepted in handle_prompt so the
+            // turn continues into model inference under the sticky mode.
+            BuiltinAction::SetEffortMode { mode, task: None, solo } => {
+                self.apply_effort_mode(mode, solo);
+                ok_end_turn(0, None)
+            }
+            BuiltinAction::SetEffortMode { task: Some(_), .. } => {
+                unreachable!("SetEffortMode with task is intercepted in handle_prompt")
+            }
             BuiltinAction::SetYolo { enabled } => {
                 let was = self.permissions.is_yolo_mode();
                 self.permissions.set_yolo_mode(enabled);

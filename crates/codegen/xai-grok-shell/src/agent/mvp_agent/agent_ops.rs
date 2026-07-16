@@ -533,6 +533,7 @@ impl MvpAgent {
     ) -> crate::session::slash_commands::CommandAvailability {
         crate::session::slash_commands::CommandAvailability {
             goal: self.cfg.borrow().resolve_goal().value,
+            effort_mode: crate::session::effort_mode::effort_mode_builtins_enabled(),
             ..crate::session::slash_commands::CommandAvailability::default()
         }
     }

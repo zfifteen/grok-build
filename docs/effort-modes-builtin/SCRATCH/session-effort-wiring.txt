@@ -1,0 +1,19 @@
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:512:    pub fn mark_synthesis_complete(&mut self) -> Result<(), EffortGateError> {
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:582:    pub fn assign_next_pending_task(&mut self, task_id: impl Into<String>) -> Option<usize> {
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:635:        let _ = self.try_finalize_synthesis();
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:666:        let _ = self.try_finalize_synthesis();
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:675:    /// Attempt full-team claim + `mark_synthesis_complete`.
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:681:    pub fn try_finalize_synthesis(&mut self) -> Result<bool, EffortGateError> {
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:694:                self.mark_synthesis_complete()?;
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:716:        match self.try_finalize_synthesis() {
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:963:        t.mark_synthesis_complete().unwrap();
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:1083:        t.mark_synthesis_complete().unwrap();
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:1118:        t.mark_synthesis_complete().unwrap();
+crates/codegen/xai-grok-shell/src/session/effort_mode.rs:1157:            assert_eq!(t.assign_next_pending_task(&tid), Some(i));
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_mode.rs:408:    pub(crate) fn effort_bind_spawned_subagent(&self, subagent_id: &str) {
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_mode.rs:410:        if let Some(slot) = tracker.assign_next_pending_task(subagent_id) {
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_mode.rs:423:    pub(crate) fn effort_on_subagent_finished(&self, subagent_id: &str, status: &str) {
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/session_mode.rs:479:    pub(super) fn effort_on_turn_end(&self) {
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/updates.rs:439:                self.effort_bind_spawned_subagent(subagent_id);
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/updates.rs:574:                self.effort_on_subagent_finished(subagent_id, status.as_str());
+crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs:1335:        self.effort_on_turn_end();

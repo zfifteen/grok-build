@@ -349,4 +349,383 @@ impl SessionActor {
             .persistence_tx
             .send(PersistenceMsg::PlanModeState(snapshot));
     }
+
+    /// Emit sticky effort chrome to the pager (mode + S of N + Partial/Waived).
+    ///
+    /// Sync-safe: persists + enqueues on the session event FIFO (same pattern
+    /// as plan `CurrentModeUpdate` enqueue) so live UI cannot drift from the
+    /// ledger without relying on model prose.
+    pub(super) fn emit_effort_chrome_update(&self) {
+        use crate::extensions::notification::{
+            SessionNotification as XaiSessionNotification, SessionUpdate as XaiSessionUpdate,
+        };
+        use crate::session::replay_events::SessionEvent;
+
+        let wire = self.effort_mode.lock().chrome_state().to_wire();
+        let update = XaiSessionUpdate::EffortModeUpdated {
+            mode: wire.mode,
+            pursuit: wire.pursuit,
+            label: wire.label,
+            successful: wire.successful,
+            target_n: wire.target_n,
+            solo_waiver: wire.solo_waiver,
+        };
+        // Durable for resume/replay viewers.
+        self.persist_xai_update_only(update.clone());
+        let notification = XaiSessionNotification {
+            session_id: self.session_info.id.clone(),
+            update,
+            meta: None,
+        };
+        let _ = self
+            .event_tx
+            .send(SessionEvent::Notification(notification.into()));
+    }
+
+    /// Inject soft effort-mode policy when sticky mode is Expert/Heavy.
+    /// Mirrors plan-mode per-turn reminder injection.
+    pub(super) async fn inject_effort_mode_reminders(&self) {
+        let plan_active = self.plan_mode.lock().is_active();
+        let reminder = self.effort_mode.lock().policy_reminder(plan_active);
+        if let Some(body) = reminder {
+            self.push_system_reminder_with_tag(&body, self.reminder_wrapper_tag());
+            tracing::debug!(
+                session_id = %self.session_info.id.0,
+                "Effort mode: injected policy system-reminder"
+            );
+        }
+    }
+
+    /// Turn-start hard runtime: open a fixed-team ledger for non-trivial
+    /// work under sticky Expert/Heavy (non-solo).
+    pub(super) fn effort_on_turn_start(&self, task_text: &str) {
+        let mut tracker = self.effort_mode.lock();
+        match tracker.on_session_turn_start(task_text) {
+            Ok(true) => {
+                tracing::info!(
+                    session_id = %self.session_info.id.0,
+                    mode = tracker.mode().as_str(),
+                    n = tracker.target_n(),
+                    "effort mode: began fixed team run"
+                );
+                drop(tracker);
+                self.persist_effort_mode_state();
+                self.emit_effort_chrome_update();
+            }
+            Ok(false) => {
+                // Solo/trivial/already-pursuing may still change Waived chrome.
+                drop(tracker);
+                self.emit_effort_chrome_update();
+            }
+            Err(e) => {
+                tracing::debug!(
+                    session_id = %self.session_info.id.0,
+                    error = %e,
+                    "effort mode: turn-start team begin skipped"
+                );
+            }
+        }
+    }
+
+    /// Shell-owned mandatory Expert/Heavy fan-out: spawn N specialists,
+    /// join-all, record ledger outcomes, inject report package for the leader.
+    ///
+    /// Runs only when `needs_mandatory_fanout()` (pending unbound slots).
+    /// Does **not** rely on the model calling `spawn_subagent`.
+    pub(super) async fn maybe_run_mandatory_effort_team(&self, task_text: &str) {
+        let (needs, mode) = {
+            let tracker = self.effort_mode.lock();
+            (tracker.needs_mandatory_fanout(), tracker.mode())
+        };
+        if !needs {
+            return;
+        }
+
+        let Some(event_tx) = self.tool_context.subagent_event_tx.clone() else {
+            tracing::warn!(
+                session_id = %self.session_info.id.0,
+                "effort mode: mandatory team requested but subagent channel missing"
+            );
+            self.push_system_reminder_with_tag(
+                "Effort mode: mandatory specialist team could not start (subagents unavailable). \
+                 Writes stay blocked until synthesis, abort, --solo, or /normal.",
+                self.reminder_wrapper_tag(),
+            );
+            return;
+        };
+
+        let parent_prompt_id = self
+            .current_prompt_id
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+        let cwd = Some(self.session_info.cwd.clone());
+        let parent_session_id = self.session_info.id.0.to_string();
+
+        let n = mode.team_size_default().unwrap_or(0);
+        let planned = crate::session::effort_team::plan_mandatory_team(mode, task_text);
+        if planned.is_empty() {
+            return;
+        }
+
+        // Pre-bind every slot → task_id (Running) before spawn so join maps 1:1.
+        {
+            let mut tracker = self.effort_mode.lock();
+            for p in &planned {
+                if let Err(e) = tracker.record_outcome(
+                    p.brief.slot,
+                    crate::session::effort_mode::SpecialistStatus::Running,
+                    Some(p.task_id.clone()),
+                ) {
+                    tracing::warn!(
+                        session_id = %self.session_info.id.0,
+                        slot = p.brief.slot,
+                        error = %e,
+                        "effort mode: failed to pre-bind specialist slot"
+                    );
+                }
+            }
+            drop(tracker);
+            self.persist_effort_mode_state();
+            // Show Expert/Heavy 0 of N before specialists finish.
+            self.emit_effort_chrome_update();
+        }
+
+        tracing::info!(
+            session_id = %self.session_info.id.0,
+            mode = mode.as_str(),
+            n,
+            "effort mode: launching mandatory specialist team"
+        );
+
+        let joins = crate::session::effort_team::run_planned_team(
+            &event_tx,
+            &parent_session_id,
+            parent_prompt_id,
+            cwd,
+            planned,
+        )
+        .await;
+
+        // Apply join results by slot (source of truth for this orchestration).
+        {
+            let mut tracker = self.effort_mode.lock();
+            for join in &joins {
+                let status = if join.cancelled {
+                    crate::session::effort_mode::SpecialistStatus::Cancelled
+                } else if join.success {
+                    crate::session::effort_mode::SpecialistStatus::Success
+                } else {
+                    crate::session::effort_mode::SpecialistStatus::Failed
+                };
+                if let Err(e) = tracker.on_session_specialist_outcome(
+                    join.brief.slot,
+                    status,
+                    Some(join.task_id.clone()),
+                ) {
+                    tracing::debug!(
+                        session_id = %self.session_info.id.0,
+                        task_id = %join.task_id,
+                        slot = join.brief.slot,
+                        error = %e,
+                        "effort mode: join record failed"
+                    );
+                }
+            }
+            let progress = tracker.progress_label();
+            let synth = tracker.synthesis_complete();
+            let hard_stop = tracker.is_hard_stop();
+            drop(tracker);
+            self.persist_effort_mode_state();
+
+            // Package reports for the leader (success and failure bodies).
+            let report_pairs: Vec<_> = joins
+                .iter()
+                .map(|j| (j.brief.clone(), j.body.clone()))
+                .collect();
+            let package = crate::session::effort_mode::format_team_report_package(
+                mode,
+                &progress,
+                &report_pairs,
+            );
+            let mut body = package;
+            if synth {
+                body.push_str(
+                    "\nFull-team synthesis gate is satisfied. Synthesize and answer the user. \
+                     Execute/write tools are unlocked (unless plan mode blocks).",
+                );
+            } else if hard_stop {
+                body.push_str(&format!(
+                    "\n**Hard-stop:** team short of N ({progress}). Writes stay blocked. \
+                     User choices: continue (one more replace wave), --solo, or /normal."
+                ));
+            } else {
+                body.push_str(&format!(
+                    "\nTeam incomplete ({progress}). Writes stay blocked until full claim, \
+                     abort/partial, --solo, or /normal."
+                ));
+            }
+            self.push_system_reminder_with_tag(&body, self.reminder_wrapper_tag());
+
+            tracing::info!(
+                session_id = %self.session_info.id.0,
+                mode = mode.as_str(),
+                progress = %progress,
+                synthesis_complete = synth,
+                hard_stop,
+                "effort mode: mandatory team join finished"
+            );
+            self.emit_effort_chrome_update();
+        }
+    }
+
+    /// User cancel: abort in-flight effort team → PartialReport (S of N).
+    pub(super) fn effort_on_user_cancel(&self) {
+        let mut tracker = self.effort_mode.lock();
+        if let Some(label) = tracker.on_session_user_cancel() {
+            tracing::info!(
+                session_id = %self.session_info.id.0,
+                progress = %label,
+                "effort mode: team aborted to partial report"
+            );
+            drop(tracker);
+            self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
+        }
+    }
+
+    /// Bind a freshly spawned subagent to the next free specialist slot.
+    pub(crate) fn effort_bind_spawned_subagent(&self, subagent_id: &str) {
+        let mut tracker = self.effort_mode.lock();
+        if let Some(slot) = tracker.assign_next_pending_task(subagent_id) {
+            tracing::debug!(
+                session_id = %self.session_info.id.0,
+                subagent_id,
+                slot,
+                "effort mode: bound subagent to specialist slot"
+            );
+            drop(tracker);
+            self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
+        }
+    }
+
+    /// Specialist finished (real SubagentFinished path or faked handle).
+    pub(crate) fn effort_on_subagent_finished(&self, subagent_id: &str, status: &str) {
+        let specialist =
+            crate::session::effort_mode::EffortModeTracker::specialist_status_from_subagent(status);
+        let mut tracker = self.effort_mode.lock();
+        match tracker.on_session_specialist_finished(subagent_id, specialist) {
+            Ok(()) => {
+                let done = tracker.synthesis_complete();
+                let progress = tracker.progress_label();
+                drop(tracker);
+                self.persist_effort_mode_state();
+                self.emit_effort_chrome_update();
+                if done {
+                    tracing::info!(
+                        session_id = %self.session_info.id.0,
+                        progress = %progress,
+                        "effort mode: full-team synthesis complete; execute unlocked"
+                    );
+                }
+            }
+            Err(crate::session::effort_mode::EffortGateError::UnknownSlot(_)) => {
+                // Subagent not part of the effort ledger (normal work).
+            }
+            Err(e) => {
+                tracing::debug!(
+                    session_id = %self.session_info.id.0,
+                    error = %e,
+                    "effort mode: specialist finish ignored"
+                );
+            }
+        }
+    }
+
+    /// Specialist completion by slot (faked task handles / tests).
+    pub(crate) fn effort_record_specialist_outcome(
+        &self,
+        slot: usize,
+        status: crate::session::effort_mode::SpecialistStatus,
+        task_id: Option<String>,
+    ) -> Result<(), crate::session::effort_mode::EffortGateError> {
+        let result = self
+            .effort_mode
+            .lock()
+            .on_session_specialist_outcome(slot, status, task_id);
+        if result.is_ok() {
+            self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
+        }
+        result
+    }
+
+    /// Claim full-team finalize (denied when under-count / missing contrarian).
+    pub(crate) fn effort_claim_full_team(
+        &self,
+    ) -> Result<(), crate::session::effort_mode::EffortGateError> {
+        self.effort_mode.lock().on_session_claim_full_team()
+    }
+
+    /// Turn-end: finalize synthesis when all fixed slots are terminal.
+    pub(super) fn effort_on_turn_end(&self) {
+        let mut tracker = self.effort_mode.lock();
+        let done = tracker.on_session_turn_end();
+        if done || tracker.pursuit() == crate::session::effort_mode::PursuitState::Pursuing {
+            drop(tracker);
+            self.persist_effort_mode_state();
+            self.emit_effort_chrome_update();
+            if done {
+                tracing::info!(
+                    session_id = %self.session_info.id.0,
+                    "effort mode: turn-end synthesis finalize succeeded"
+                );
+            }
+        }
+    }
+
+    /// Apply sticky effort mode (Expert/Heavy/Normal) and persist snapshot.
+    pub(super) fn apply_effort_mode(
+        &self,
+        mode: crate::session::effort_mode::EffortMode,
+        solo: bool,
+    ) {
+        let previous = self.effort_mode.lock().mode();
+        {
+            let mut tracker = self.effort_mode.lock();
+            if mode == crate::session::effort_mode::EffortMode::Normal {
+                // Mid-flight /normal: abort remaining specialists then clear.
+                let _ = tracker.on_session_user_cancel();
+                tracker.clear_to_normal();
+            } else {
+                tracker.set_mode(mode, solo);
+            }
+        }
+        self.persist_effort_mode_state();
+        self.emit_effort_chrome_update();
+        tracing::info!(
+            session_id = %self.session_info.id.0,
+            mode = mode.as_str(),
+            previous = previous.as_str(),
+            solo,
+            "effort mode set",
+        );
+        tracing::info_span!(
+            "session.effort_mode_toggled",
+            mode = mode.as_str(),
+            previous = previous.as_str(),
+            solo,
+        )
+        .in_scope(|| {});
+    }
+
+    /// Persist sticky effort mode to disk (best-effort via persistence channel).
+    pub(super) fn persist_effort_mode_state(&self) {
+        let snapshot = self.effort_mode.lock().snapshot();
+        let _ = self
+            .notifications
+            .persistence_tx
+            .send(PersistenceMsg::EffortModeState(snapshot));
+    }
 }

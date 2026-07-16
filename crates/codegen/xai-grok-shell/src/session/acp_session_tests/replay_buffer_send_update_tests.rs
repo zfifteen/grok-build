@@ -176,6 +176,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
                 "/tmp/test-session",
             )),
         )),
+        effort_mode: std::sync::Arc::new(parking_lot::Mutex::new(crate::session::effort_mode::EffortModeTracker::new(std::path::PathBuf::from("/tmp/effort-mode-test")))),
         goal_enabled: false,
         goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
         goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(false),
