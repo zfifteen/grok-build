@@ -45,6 +45,8 @@ use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
 use xai_grok_update::{UpdateConfig, auto_update, enforce_minimum_version_or_exit};
+#[cfg(feature = "powergrok")]
+use xai_grok_config::product_name;
 /// Apply headless args to an existing config, only overriding values that are
 /// explicitly set. This allows environment defaults to be preserved when
 /// specific args are not provided.
@@ -877,8 +879,14 @@ async fn run_agent_command(
     let is_stdio = matches!(agent_args.mode, Some(AgentCmd::Stdio));
     let is_leader = matches!(agent_args.mode, Some(AgentCmd::Leader(_)));
     if !is_stdio && !is_leader {
+        let brand = if cfg!(feature = "powergrok") {
+            product_name()
+        } else {
+            "Grok Build"
+        };
         eprintln!(
-            "Grok Build (pager) - v{}",
+            "{} (pager) - v{}",
+            brand,
             xai_grok_version::display_version_with_commit(
                 env!("VERSION_WITH_COMMIT"),
                 xai_grok_update::channel_label(),
@@ -2888,6 +2896,42 @@ mod tests {
             out,
             Err("boom".to_string()),
             "Err output must pass through unchanged",
+        );
+    }
+
+    /// B10 CI branding test (integration).
+    /// Verifies that under the powergrok feature the binary advertises the new brand.
+    #[test]
+    fn branding_help_contains_power_grok() {
+        use std::process::Command;
+
+        // Build with the powergrok feature so the adapter returns "Power Grok".
+        let output = Command::new("cargo")
+            .args([
+                "run",
+                "--quiet",
+                "-p",
+                "xai-grok-pager-bin",
+                "--features",
+                "powergrok",
+                "--",
+                "--help",
+            ])
+            .output()
+            .expect("failed to run powergrok binary with branding feature");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}{}", stdout, stderr);
+
+        assert!(
+            combined.contains("Power Grok"),
+            "powergrok binary --help must contain \"Power Grok\" (got: {})",
+            combined
+        );
+        assert!(
+            !combined.contains("Grok Build (pager)"),
+            "--help must not show the old fallback banner when branding is active"
         );
     }
 }
