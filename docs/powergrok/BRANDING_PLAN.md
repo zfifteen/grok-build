@@ -148,10 +148,10 @@ rg -n 'GROK_HOME|grok_home' crates/   # classify as technical
 rg -n '"\.grok"' crates/              # must remain (isolation)
 ```
 
-Categorize every hit:
-- **Update** → Power Grok
+Categorize every hit (following the rules defined in Section 4):
+- **Update** → "Power Grok"
 - **Preserve** → technical/official/upstream (add to allowlist with justification)
-- **Conditional** → guarded by `is_powergrok()` or argv0 check
+- **Conditional** → extracted to a branding adapter guarded by the `powergrok` feature flag or `POWERGROK_BRANDING=1` env var
 
 Document results in `docs/powergrok/BRANDING_AUDIT.md` (or in this file).
 
