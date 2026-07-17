@@ -17,7 +17,7 @@ actually sticks with them.
 
 ---
 
-## Why this exists
+## "Expert" and "Heavy" Modes in the TUI
 
 If you use [Grok on the web](https://grok.com), you already know the idea:
 sometimes you want a quick answer, sometimes you want the model to **work harder**
@@ -35,7 +35,7 @@ In short: **web-style effort depth, local by design.**
 
 ---
 
-## Effort modes, in plain English
+## How They Work
 
 Type a slash command. The mode sticks for the session. The chrome tells you
 where you are. For non-trivial work, the shell **enforces** a team size instead
