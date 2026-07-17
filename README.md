@@ -2,87 +2,81 @@
 
 # Power Grok (`powergrok`)
 
-**Power Grok** is a **source-built, parallel install** of [Grok Build](https://github.com/xai-org/grok-build)
-that coexists with the official `grok` CLI. It is the product line of this fork
-([zfifteen/powergrok](https://github.com/zfifteen/powergrok)): same agent runtime
-family, **different product identity**, private state, and fork-first session modes.
+**Expert · Heavy · Normal** — session **effort modes** for Grok Build, in the terminal.
 
-[What makes this fork different](#what-makes-this-fork-different) ·
-[Install (side-by-side)](#install-side-by-side) ·
-[Building from source](#building-from-source) ·
-[Documentation](#documentation) ·
-[Repository layout](#repository-layout) ·
-[Development](#development) ·
-[Branch model](#branch-model) ·
+Power Grok brings the **mental model of [Grok on the web](https://grok.com)**
+(light / deeper / maximum multi-agent depth) into a **source-built, parallel
+CLI/TUI** that coexists with the official `grok` binary. Under Expert and Heavy,
+specialists run **customizable reasoning profiles** (“brains”) you can edit —
+not stock cosplay personas.
+
+[Effort modes](#effort-modes-expert--heavy--normal) ·
+[Reasoning brains](#reasoning-brains-customizable-profiles) ·
+[Install](#install-side-by-side) ·
+[Build](#building-from-source) ·
+[Docs](#documentation) ·
+[Layout](#repository-layout) ·
 [License](#license)
 
-**Command:** `powergrok` · **User state:** `~/.powergrok` · **Trunk:** `powergrok` branch
+| Slash | Depth | Specialists |
+|-------|-------|-------------|
+| **`/normal`** | Default | Single leader — no fixed team |
+| **`/expert`** | High | **4** analytic specialists |
+| **`/heavy`** | Maximum | **16** analytic specialists (≥1 contrarian) |
+
+**Command:** `powergrok` · **State:** `~/.powergrok` · **Trunk:** `powergrok` branch ·
+**Fork of:** [xai-org/grok-build](https://github.com/xai-org/grok-build)
 
 </div>
 
 ---
 
-## What makes this fork different
+## Effort modes: Expert · Heavy · Normal
 
-Upstream Grok Build is a terminal AI coding agent: full-screen TUI, codebase
-understanding, edits, shell, web search, long-running tasks, headless/CI, and
-ACP for editors. Power Grok keeps that substrate and adds a **product layer**
-you will not get from a stock install alone.
+This is the headline product difference.
 
-### 1. Parallel product, not a rename
+On [Grok Web](https://grok.com), deeper effort means more deliberate multi-agent
+work before you get an answer. Power Grok **mirrors that mental model** for the
+local coding agent: sticky session modes, visible TUI chrome, and **hard
+fixed-N gates** for non-trivial tasks — implemented as first-party shell
+builtins, not “please remember a skill.”
 
-| Concern | Official Grok Build | Power Grok |
-|---------|---------------------|------------|
-| Command | `grok` | **`powergrok`** |
-| User state | `~/.grok` | **`~/.powergrok`** (`GROK_HOME`) |
-| Project tree | `<repo>/.grok/` | **`<repo>/.powergrok/`** (when run as `powergrok`) |
-| Auto-update | product default | **off** in Power Grok seed (source-built stays put) |
-| Concurrent use | — | **Supported** alongside official `grok` |
+| Mode | Builtin | Fixed successful specialists | When to use |
+|------|---------|------------------------------|-------------|
+| **Normal** | `/normal` | none required | Day-to-day coding, chat, lookups |
+| **Expert** | `/expert` | **exactly 4** | Design, audits, tricky bugs — interactive team depth |
+| **Heavy** | `/heavy` | **exactly 16**, ≥1 contrarian | Highest local multi-agent depth before you commit |
 
-Power Grok does **not** overwrite the official binary. Full isolation contract:
-[`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md). Branding rules
-(“Power Grok” in prose, `powergrok` for binary/paths):
-[`docs/powergrok/BRANDING_PLAN.md`](docs/powergrok/BRANDING_PLAN.md).
+### How a turn works (Expert / Heavy)
 
-### 2. Builtin effort modes — Expert, Heavy, Normal
+1. You stay in **sticky** mode (empty `/expert` or `/heavy` sets it for the session).
+2. On **non-trivial** user work, the shell **must** fan out a fixed team.
+3. Specialists are **analytic-only** (read/search — no repo writes inside N).
+4. **Join-all** → **leader synthesis** (structured disagreement, not a bland average).
+5. **Execute** (writes) only **after** synthesis, outside the fixed N.
+6. Replace caps, abort → partial report, and solo waiver are **ledger rules**, not prompt hope.
 
-Session **effort modes** are first-party shell builtins (`/expert`, `/heavy`,
-`/normal`): sticky mode, TUI chrome, and hard local multi-agent gates for
-non-trivial work.
-
-| Mode | Fixed successful specialists | Role |
-|------|------------------------------|------|
-| **Normal** | none required | Default single-leader Power Grok |
-| **Expert** | **exactly 4** | High-quality interactive team depth |
-| **Heavy** | **exactly 16**, ≥1 contrarian | Maximum local multi-agent depth |
-
-What that means in practice:
-
-- **Shell-mandatory fan-out** for non-trivial Expert/Heavy turns — not “hope the
-  model remembers a skill.”
-- **Analytic-only fixed team** (read/search specialists; no repo writes inside N).
-- **Join-all → leader synthesis → optional post-N execute** after synthesis.
-- **Replace caps, abort → partial report, solo waiver** — enforceable ledger
-  semantics, not soft prompt theater.
-- **Not** the platform multi-agent research API as the product path; this is
-  **local** orchestration on your machine.
+Local orchestration on your machine — not a dependency on the platform multi-agent
+research API as the product path.
 
 Program docs: [`docs/effort-modes-builtin/`](docs/effort-modes-builtin/).
 
-### 3. Sixteen reasoning brains (not cosplay personas)
+---
 
-Expert and Heavy specialists are not generic `specialist-0..N` fillers. They run
-**versioned reasoning protocols** — method, forbidden moves, artifact shape, and
-a deliberate **delta role** so the team disagrees productively.
+## Reasoning brains (customizable profiles)
 
-| Roster rule | Behavior |
-|-------------|----------|
-| **Pool** | **16** built-in brains |
-| **Expert** | **Random 4** of 16 (without replacement per team run; seedable via `GROK_EFFORT_BRAIN_SEED`) |
-| **Heavy** | **All 16** in fixed order (≥1 `contrarian_class`; last slot defaults to `red_team`) |
-| **Leader synthesis** | Disagreement-oriented package (consensus / conflicts / unique / residuals / decision) |
+Expert and Heavy specialists are driven by a pool of **16 reasoning brains**:
+versioned **protocols** (method, forbidden moves, artifact shape, delta role).
+They are **profiles for subagents**, not character cosplay.
 
-Catalog families (built-in ids):
+| Roster | Rule |
+|--------|------|
+| **Pool** | **16** built-in brains (shipped + seeded for edit) |
+| **Expert** | Draws a **random 4** of 16 per team run (optional `GROK_EFFORT_BRAIN_SEED`) |
+| **Heavy** | Runs **all 16** in fixed order (contrarian class required; `red_team` last by default) |
+| **Synthesis** | Leader must surface consensus, conflicts, unique takes, residuals, and a decision |
+
+### Built-in catalog (ids)
 
 | Family | Brains |
 |--------|--------|
@@ -92,37 +86,54 @@ Catalog families (built-in ids):
 | Decision quality | `scientific_method`, `bayesian_update`, `fermi_estimate` |
 | Adversarial / dialectic | `via_negativa`, `ooda_tempo`, `steelman_dialectic`, `red_team` |
 
-**Editable config** (seeded on first use from product defaults):
+### Customize the profiles
+
+On first use, defaults seed under your Power Grok home. Edit freely; keep
+frontmatter `id`s stable.
 
 ```text
-$GROK_HOME/effort-brains/
-  catalog.toml
-  rosters/{expert,heavy}.toml
-  brains/*.md
+$GROK_HOME/effort-brains/          # usually ~/.powergrok/effort-brains
+  catalog.toml                     # list + flags (e.g. allow_model_overrides)
+  rosters/expert.toml              # selection = random, k = 4
+  rosters/heavy.toml               # fixed 16-slot order
+  brains/*.md                      # protocol body + YAML frontmatter
   README.md
 ```
 
-Optional project overlay: `<workspace>/.powergrok/effort-brains/`. Merge-by-id;
-invalid config fails loudly — no silent drop back to angle cosplay.
+Optional **project** overlay: `<workspace>/.powergrok/effort-brains/` (merge-by-id).
+Invalid config fails loudly — no silent fallback to generic specialists.
 
-Implementation plan: [`docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md`](docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md).
+Optional per-brain **model** overrides when `allow_model_overrides = true` in
+`catalog.toml`.
 
-### 4. Same agent, clearer product surface
+Plan: [`docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md`](docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md).
 
-You still get the Grok Build capabilities (TUI, tools, MCP, skills, plan mode,
-headless, ACP). Power Grok adds **named isolation**, **Power Grok chrome**, and
-**effort/brain orchestration** so deep work is a **mode you enter**, not a
-prompt you hope sticks.
+---
+
+## Also: a parallel install of Grok Build
+
+Under the modes sits a full Grok Build–family agent (TUI, tools, MCP, skills,
+plan mode, headless, ACP). Power Grok is a **side-by-side product**, not a rename
+of official `grok`:
+
+| Concern | Official Grok Build | Power Grok |
+|---------|---------------------|------------|
+| Command | `grok` | **`powergrok`** |
+| User state | `~/.grok` | **`~/.powergrok`** (`GROK_HOME`) |
+| Project tree | `<repo>/.grok/` | **`<repo>/.powergrok/`** (when run as `powergrok`) |
+| Auto-update | product default | **off** in Power Grok seed |
+| Concurrent use | — | **Supported** with official `grok` |
+
+Isolation contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md).  
+Branding (“Power Grok” in prose, `powergrok` for binary/paths):
+[`docs/powergrok/BRANDING_PLAN.md`](docs/powergrok/BRANDING_PLAN.md).
 
 ---
 
 ## Install (side-by-side)
 
-Official released `grok` installers remain at [x.ai/cli](https://x.ai/cli) for
-the stock product. **Power Grok** is built from **this repo’s `powergrok`
-branch** and installed beside it.
-
-Typical layout (see build plan for the full contract):
+Official released `grok` installers: [x.ai/cli](https://x.ai/cli).  
+**Power Grok** builds from **this repo’s `powergrok` branch**.
 
 | Piece | Path |
 |-------|------|
@@ -132,7 +143,6 @@ Typical layout (see build plan for the full contract):
 | User home | `~/.powergrok` (`GROK_HOME`) |
 
 ```sh
-# From a clean checkout of this repo (product trunk):
 git checkout powergrok
 git pull origin powergrok
 
@@ -141,7 +151,6 @@ cargo build -p xai-grok-pager-bin --release --features powergrok
 mkdir -p ~/.local/lib/powergrok ~/.local/bin ~/.powergrok
 install -m 755 target/release/xai-grok-pager ~/.local/lib/powergrok/powergrok
 
-# Wrapper: set GROK_HOME, branding, exec real binary
 cat > ~/.local/bin/powergrok <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -152,41 +161,31 @@ EOF
 chmod +x ~/.local/bin/powergrok
 
 powergrok --version
-powergrok --help   # should identify Power Grok under the powergrok feature
+powergrok --help
 ```
 
-First launch still uses the product auth flow (browser / account) under
-**Power Grok’s home**, not the official `~/.grok` tree. Authentication guide
-(upstream pager docs still apply technically):
+Then in a session: `/expert` or `/heavy` for multi-agent depth; `/normal` to
+return to single-leader defaults.
+
+Auth still uses the product browser/account flow, under **Power Grok’s home**:
 [`crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md`](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 
 ---
 
 ## Building from source
 
-Requirements:
-
-- **Rust** — pinned by [`rust-toolchain.toml`](rust-toolchain.toml); `rustup`
-  installs it on first build.
-- **protoc** — [`bin/protoc`](bin/protoc) (dotslash) or `protoc` on `PATH` /
-  `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows is best-effort from this
-  tree.
+- **Rust** — [`rust-toolchain.toml`](rust-toolchain.toml) (rustup installs on first build)
+- **protoc** — [`bin/protoc`](bin/protoc) or `PATH` / `$PROTOC`
+- macOS and Linux supported; Windows best-effort
 
 ```sh
-# Fast check
 cargo check -p xai-grok-pager-bin --features powergrok
-
-# Dev run (TUI)
 cargo run -p xai-grok-pager-bin --features powergrok
-
-# Release artifact (install as powergrok — see above)
 cargo build -p xai-grok-pager-bin --release --features powergrok
 # → target/release/xai-grok-pager
 ```
 
-Always pass **`--features powergrok`** for product branding and the Power Grok
-build line. Without it you get closer to stock Grok Build labeling.
+Always pass **`--features powergrok`** for Power Grok branding and product line.
 
 ---
 
@@ -194,15 +193,13 @@ build line. Without it you get closer to stock Grok Build labeling.
 
 | Doc | What |
 |-----|------|
-| [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md) | Isolation, install, argv0 / `.powergrok/` contract |
-| [`docs/powergrok/BRANDING_PLAN.md`](docs/powergrok/BRANDING_PLAN.md) | “Power Grok” vs `powergrok` style and feature rules |
-| [`docs/effort-modes-builtin/`](docs/effort-modes-builtin/) | Expert / Heavy / Normal program (charter → tech spec → plans) |
-| [`docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md`](docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md) | 16 brains, rosters, config, runtime wiring |
-| [`AGENTS.md`](AGENTS.md) | Fork branch discipline (`main` intake vs `powergrok` trunk) |
-| Pager user guide | [`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/) — shortcuts, slash commands, MCP, skills, headless, sandbox, … |
-| Upstream product docs | [docs.x.ai/build](https://docs.x.ai/build/overview) (stock Grok Build) |
-
-Upstream marketing / binary install: [x.ai/cli](https://x.ai/cli).
+| [`docs/effort-modes-builtin/`](docs/effort-modes-builtin/) | **Expert / Heavy / Normal** charter, tech spec, architecture, tests |
+| [`docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md`](docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md) | **16 brains**, rosters, config, runtime |
+| [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md) | Isolation + install |
+| [`docs/powergrok/BRANDING_PLAN.md`](docs/powergrok/BRANDING_PLAN.md) | “Power Grok” vs `powergrok` |
+| [`AGENTS.md`](AGENTS.md) | Branch discipline (`main` intake vs `powergrok` trunk) |
+| Pager user guide | [`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/) |
+| Upstream docs | [docs.x.ai/build](https://docs.x.ai/build/overview) |
 
 ---
 
@@ -210,85 +207,70 @@ Upstream marketing / binary install: [x.ai/cli](https://x.ai/cli).
 
 | Path | Contents |
 |------|----------|
-| `crates/codegen/xai-grok-pager-bin` | Composition-root package; builds `xai-grok-pager` |
-| `crates/codegen/xai-grok-pager` | TUI: scrollback, prompt, modals, rendering, Power Grok chrome |
-| `crates/codegen/xai-grok-shell` | Agent runtime; **effort modes + reasoning brains** live under `session/` |
-| `crates/codegen/xai-grok-tools` | Tools (terminal, file edit, search, …) |
-| `crates/codegen/xai-grok-workspace` | Host filesystem, VCS, execution, checkpoints |
-| `crates/codegen/xai-grok-config` | Paths, branding adapter (`product_name()`), config |
-| `docs/powergrok/` | Fork product contracts (build, branding, reviews) |
-| `docs/effort-modes-builtin/` | Effort mode + brains program documentation |
-| `crates/common/`, `crates/build/`, `prod/mc/` | Shared leaf crates |
-| `third_party/` | Vendored upstream source (e.g. Mermaid stack) |
+| `crates/codegen/xai-grok-pager-bin` | Binary composition root (`xai-grok-pager`) |
+| `crates/codegen/xai-grok-pager` | TUI + Power Grok chrome |
+| `crates/codegen/xai-grok-shell` | Agent runtime; **effort modes + brains** under `session/` |
+| `crates/codegen/xai-grok-tools` | Tools (terminal, edit, search, …) |
+| `crates/codegen/xai-grok-workspace` | Filesystem, VCS, execution, checkpoints |
+| `crates/codegen/xai-grok-config` | Paths, branding adapter, config |
+| `docs/effort-modes-builtin/` | Effort mode + brains program docs |
+| `docs/powergrok/` | Fork product contracts |
+| `third_party/` | Vendored upstream source |
 
 > [!IMPORTANT]
-> The root `Cargo.toml` (workspace members, dependency versions, lints,
-> profiles) is **generated** — treat it as read-only. Prefer editing per-crate
+> Root `Cargo.toml` is **generated** — treat as read-only. Edit per-crate
 > `Cargo.toml` files.
 
-### Effort / brains code map (quick)
+### Effort / brains code map
 
 | Module | Role |
 |--------|------|
-| `xai-grok-shell::session::effort_mode` | Sticky modes, ledgers, gates, chrome, team briefs |
-| `xai-grok-shell::session::effort_brains` | Catalog load/validate, select, prompt, seed export |
-| `xai-grok-shell::session::effort_team` | Shell-owned specialist spawn / join |
+| `session::effort_mode` | Sticky modes, ledgers, gates, chrome, team briefs |
+| `session::effort_brains` | Catalog load/validate, select, prompt, seed export |
+| `session::effort_team` | Shell-owned specialist spawn / join |
 
 ---
 
 ## Development
 
 ```sh
-cargo check -p <crate> --features powergrok   # target specific crates; full workspace is slow
+cargo check -p <crate> --features powergrok
 cargo test -p xai-grok-shell --test effort_brains_load
 cargo test -p xai-grok-config
 cargo clippy -p <crate>
 cargo fmt --all
 ```
 
-Lint/format config: `clippy.toml` and `rustfmt.toml` at the repo root.
-
 ---
 
 ## Branch model
 
-This repository is a **fork**, not an upstream mirror alone:
-
 | Branch | Role |
 |--------|------|
 | **`main`** | Upstream intake only (`xai-org/grok-build`) |
-| **`powergrok`** | **Product trunk** and GitHub default — builds and docs ship from here |
-| **`feat/*`** | Feature work; open PRs **into `powergrok`**, never product work into `main` |
+| **`powergrok`** | **Product trunk** — default branch; builds ship from here |
+| **`feat/*`** | Feature work; PRs **into `powergrok`**, not product work into `main` |
 
 Details: [`AGENTS.md`](AGENTS.md).
 
----
-
-## Relationship to upstream
-
-- **Upstream source of truth for Grok Build engine:** [xai-org/grok-build](https://github.com/xai-org/grok-build)
-- **This fork’s product line:** [zfifteen/powergrok](https://github.com/zfifteen/powergrok) on branch **`powergrok`**
-- First-party Power Grok work (effort modes, brains, isolation, branding) lands
-  on **`powergrok`**. Upstream sync enters via **`main`**, then merges forward.
+**Upstream engine:** [xai-org/grok-build](https://github.com/xai-org/grok-build) ·
+**This product line:** [zfifteen/powergrok](https://github.com/zfifteen/powergrok)
 
 ---
 
 ## Contributing
 
-This is a personal / operator fork. Contribution policy may differ from
-upstream; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for any inherited notices.
-Feature work intended for Power Grok should target **`powergrok`** as the PR base.
+Operator fork. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for inherited notices.
+Power Grok features should target **`powergrok`** as the PR base.
 
 ---
 
 ## License
 
-First-party code in this repository is licensed under the **Apache License,
-Version 2.0** — see [`LICENSE`](LICENSE).
+First-party code: **Apache License, Version 2.0** — [`LICENSE`](LICENSE).
 
-Third-party and vendored code remains under its original licenses. See:
+Third-party / vendored code retains original licenses:
 
-- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) — crates.io / git dependencies,
-  bundled UI themes, and in-tree source ports
+- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES)
 - [`crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md)
-- [`third_party/NOTICE`](third_party/NOTICE) — vendored Mermaid-stack index
+- [`third_party/NOTICE`](third_party/NOTICE)
