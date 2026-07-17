@@ -26,9 +26,8 @@ fn main() {
     );
 
     // B9: Build-time structured documentation override for Power Grok.
-    // We copy the upstream user-guide and apply targeted replacements only
-    // when the powergrok feature is enabled. This avoids duplicating the
-    // entire guide or using runtime regex.
+    // Copy the upstream user-guide and apply targeted replacements only when
+    // the powergrok feature is enabled. Avoids duplicating the entire guide.
     if std::env::var_os("CARGO_FEATURE_POWERGROK").is_some() {
         let src_dir = Path::new("docs/user-guide");
         let out_dir = Path::new(&std::env::var("OUT_DIR").unwrap()).join("user-guide");
@@ -42,10 +41,8 @@ fn main() {
                 let content = fs::read_to_string(&path).unwrap();
 
                 // Structured replacements for Power Grok branding (B9).
-                // We update user-facing product names. Command examples are
-                // intentionally updated from `grok` to `powergrok` where safe.
-                // Technical paths (.grok/, GROK_HOME, model names, etc.) are
-                // deliberately left untouched.
+                // User-facing product names and command examples are updated.
+                // Technical paths (.grok/, GROK_HOME, model names, etc.) stay.
                 let branded = content
                     .replace("Grok Build", "Power Grok")
                     .replace("Grok CLI", "Power Grok")
@@ -55,14 +52,28 @@ fn main() {
                     .replace("`grok ", "`powergrok ");
 
                 let dest = out_dir.join(path.file_name().unwrap());
-                fs::write(dest, branded).unwrap();
+                fs::write(&dest, branded).unwrap();
             }
         }
 
-        println!("cargo:rustc-env=POWERGROK_USER_GUIDE_DIR={}", out_dir.display());
+        println!(
+            "cargo:rustc-env=POWERGROK_USER_GUIDE_DIR={}",
+            out_dir.display()
+        );
 
-        // B9 golden test: verify at least one transformed page contains the
-        // expected branding so we catch regressions in the replacement logic.
-        println!("cargo:warning=B9 golden test: docs/user-guide/01-getting-started.md was branded");
+        // Real golden check (not cargo:warning): fail the build if branding
+        // replacements did not land on the getting-started page.
+        let golden = out_dir.join("01-getting-started.md");
+        let golden_body = fs::read_to_string(&golden).unwrap_or_else(|e| {
+            panic!(
+                "B9 golden: failed to read branded {}: {e}",
+                golden.display()
+            )
+        });
+        assert!(
+            golden_body.contains("Power Grok"),
+            "B9 golden: branded {} must contain \"Power Grok\"",
+            golden.display()
+        );
     }
 }

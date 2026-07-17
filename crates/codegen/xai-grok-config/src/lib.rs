@@ -50,21 +50,10 @@ pub use paths::{
     sessions_cwd_dir, system_config_dir, user_grok_home,
 };
 
-#[cfg(feature = "powergrok")]
+// Always compiled so call sites can use product_name() without feature-gated
+// imports (default builds must stay green; Model A lives inside the helpers).
 pub mod branding;
-#[cfg(feature = "powergrok")]
 pub use branding::{is_powergrok_branding, product_name};
-
-// Non-powergrok builds still need the symbols so that code using them compiles
-// without feature-gated `cfg` at every call site.
-#[cfg(not(feature = "powergrok"))]
-pub fn is_powergrok_branding() -> bool {
-    false
-}
-#[cfg(not(feature = "powergrok"))]
-pub fn product_name() -> &'static str {
-    "Grok Build"
-}
 
 pub use validation::{
     RequirementsError, RequirementsLayer, RequirementsSource, fail_closed_flag_from_str,

@@ -45,7 +45,6 @@ use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
 use xai_grok_update::{UpdateConfig, auto_update, enforce_minimum_version_or_exit};
-#[cfg(feature = "powergrok")]
 use xai_grok_config::product_name;
 /// Apply headless args to an existing config, only overriding values that are
 /// explicitly set. This allows environment defaults to be preserved when
@@ -879,14 +878,9 @@ async fn run_agent_command(
     let is_stdio = matches!(agent_args.mode, Some(AgentCmd::Stdio));
     let is_leader = matches!(agent_args.mode, Some(AgentCmd::Leader(_)));
     if !is_stdio && !is_leader {
-        let brand = if cfg!(feature = "powergrok") {
-            product_name()
-        } else {
-            "Grok Build"
-        };
         eprintln!(
             "{} (pager) - v{}",
-            brand,
+            product_name(),
             xai_grok_version::display_version_with_commit(
                 env!("VERSION_WITH_COMMIT"),
                 xai_grok_update::channel_label(),

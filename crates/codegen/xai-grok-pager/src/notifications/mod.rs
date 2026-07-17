@@ -7,9 +7,6 @@ pub mod sleep;
 pub mod title;
 pub mod tmux;
 
-#[cfg(feature = "powergrok")]
-use xai_grok_config::product_name;
-
 use std::time::{Duration, Instant};
 
 /// Ghostty resets the OSC 9;4 progress indicator after ~15 s of silence.
@@ -481,7 +478,7 @@ mod tests {
         });
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: product_name().to_string().into(),
+            title: xai_grok_config::product_name().to_string().into(),
             body: "Turn complete".into(),
             session_id: Some("test-session".into()),
         });
@@ -496,7 +493,7 @@ mod tests {
         });
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::SessionReady,
-            title: product_name().to_string().into(),
+            title: xai_grok_config::product_name().to_string().into(),
             body: "Session ready".into(),
             session_id: None,
         });
@@ -753,7 +750,7 @@ mod tests {
         // crash regardless of suppression state.
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: product_name().to_string().into(),
+            title: xai_grok_config::product_name().to_string().into(),
             body: "Done".into(),
             session_id: None,
         });

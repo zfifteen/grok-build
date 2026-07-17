@@ -22,9 +22,9 @@
 | B5 | Logo / visual | No change in v1 (reuse existing Grok Build / xAI assets; optional text "Power Grok" badge). Visual rebrand is deferred. |
 | B6 | Version string | Keep stock binary `--version`. Append Powergrok context **only** in wrapper output or `~/.local/lib/powergrok/VERSION` (e.g. "Power Grok (built from SHA...)"). |
 | B7 | Coexistence language | **Mandatory** in all updated docs and messages: "Power Grok — a parallel, source-built installation of Grok Build that coexists with the official `grok`". |
-| **B8 (new)** | Branding detection mechanism | Dedicated `POWERGROK_BRANDING=1` env var set by wrapper (plus compile-time `powergrok` feature flag). `argv0` is **supplementary only**. |
+| **B8 (new)** | Branding detection mechanism | **Model A (locked after Hermes PR #5):** `powergrok` Cargo feature **always** brands as Power Grok. `POWERGROK_BRANDING=1` is a non-feature override for tests/experiments only. Adapter is always compiled; call sites use `product_name()` without scattering `cfg!`. `argv0` is not primary. |
 | **B9 (new)** | Documentation strategy | Maintain a minimal set of Powergrok-specific overrides/patches (build-time or runtime via structured mechanism, **not** naive regex). Do not duplicate entire user guide. |
-| **B10 (new)** | Style & CI gate | Strict style guide ("Power Grok" = product, "powergrok" = binary/branch). Automated test that asserts "Power Grok" in `--help`, TUI header, and effort chrome. One-time `rg` audit is **insufficient** — must produce ongoing CI check. |
+| **B10 (new)** | Style & CI gate | Strict style guide ("Power Grok" = product, "powergrok" = binary/branch). Automated test asserts **"Power Grok" in `--help`** under `--features powergrok` (integration test). TUI header uses the same `product_name()` adapter. Effort-chrome branding is deferred (not required to merge branding v1). |
 
 **Hard rule (post-Gemini):** All branding logic must be **isolated** behind feature flags (`powergrok`), wrapper env vars (`POWERGROK_BRANDING=1`), or dedicated adapters. Inline `if is_powergrok()` conditionals in upstream TUI/CLI code are prohibited due to merge-conflict debt. Every upstream sync must remain low-friction.
 

@@ -4,7 +4,6 @@ use crossterm::terminal::SetTitle;
 
 use super::config::{TitleConfig, TitleItem};
 use crate::acp::tracker::TurnActivity;
-#[cfg(feature = "powergrok")]
 use xai_grok_config::product_name;
 
 const TITLE_SPINNER: &[char] = &[
@@ -115,8 +114,7 @@ impl TitleManager {
     }
 
     pub fn reset(&mut self) -> String {
-        // Always call product_name() when the powergrok feature is enabled.
-        // This eliminates scattered cfg! branches (per review point 7 / hard rule).
+        // Single source of truth: same product name as help/about chrome.
         let brand = product_name();
         let esc = build_title_escape(brand);
         self.last_title.clear();
@@ -139,10 +137,8 @@ fn write_item(
     match item {
         TitleItem::Grok => {
             push_separator(buf, has_parts);
-            // Use title-case "Power Grok" for UI chrome consistency (review point 6).
-            // Lowercasing was creating "power grok" which mixed with "Power Grok".
-            let brand = product_name().to_lowercase().replace(' ', "-");
-            buf.push_str(&brand);
+            // Same product name as reset()/help ("Power Grok" under Model A).
+            buf.push_str(product_name());
         }
         TitleItem::Spinner => {
             if !state.is_busy && state.activity.is_none() {
