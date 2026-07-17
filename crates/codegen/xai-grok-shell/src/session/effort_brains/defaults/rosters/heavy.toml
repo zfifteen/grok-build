@@ -1,0 +1,21 @@
+version = 1
+mode = "heavy"
+selection = "fixed"
+slots = [
+  "first_principles",
+  "map_territory",
+  "circle_of_competence",
+  "systems_loops",
+  "theory_of_constraints",
+  "five_whys_root",
+  "second_order",
+  "inversion",
+  "pre_mortem",
+  "scientific_method",
+  "bayesian_update",
+  "fermi_estimate",
+  "via_negativa",
+  "ooda_tempo",
+  "steelman_dialectic",
+  "red_team",
+]

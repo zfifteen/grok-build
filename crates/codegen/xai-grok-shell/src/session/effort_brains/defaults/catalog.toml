@@ -1,0 +1,118 @@
+version = 1
+
+[defaults]
+allow_model_overrides = false
+require_contrarian_on_heavy = true
+expert_k = 4
+
+[[brains]]
+id = "first_principles"
+file = "brains/first_principles.md"
+family = "foundations"
+delta_role = "regenerate_solution_space"
+contrarian_class = false
+
+[[brains]]
+id = "map_territory"
+file = "brains/map_territory.md"
+family = "foundations"
+delta_role = "expose_representation_error"
+contrarian_class = false
+
+[[brains]]
+id = "circle_of_competence"
+file = "brains/circle_of_competence.md"
+family = "foundations"
+delta_role = "bound_overreach"
+contrarian_class = false
+
+[[brains]]
+id = "systems_loops"
+file = "brains/systems_loops.md"
+family = "systems"
+delta_role = "nonlocal_delayed_effects"
+contrarian_class = false
+
+[[brains]]
+id = "theory_of_constraints"
+file = "brains/theory_of_constraints.md"
+family = "systems"
+delta_role = "binding_limit"
+contrarian_class = false
+
+[[brains]]
+id = "five_whys_root"
+file = "brains/five_whys_root.md"
+family = "systems"
+delta_role = "past_surface_symptoms"
+contrarian_class = false
+
+[[brains]]
+id = "second_order"
+file = "brains/second_order.md"
+family = "consequences"
+delta_role = "fix_creates_problem"
+contrarian_class = false
+
+[[brains]]
+id = "inversion"
+file = "brains/inversion.md"
+family = "failure_first"
+delta_role = "failure_first_pressure"
+contrarian_class = true
+
+[[brains]]
+id = "pre_mortem"
+file = "brains/pre_mortem.md"
+family = "failure_first"
+delta_role = "prospective_autopsy"
+contrarian_class = true
+
+[[brains]]
+id = "scientific_method"
+file = "brains/scientific_method.md"
+family = "evidence"
+delta_role = "empirical_checkability"
+contrarian_class = false
+
+[[brains]]
+id = "bayesian_update"
+file = "brains/bayesian_update.md"
+family = "evidence"
+delta_role = "explicit_uncertainty"
+contrarian_class = false
+
+[[brains]]
+id = "fermi_estimate"
+file = "brains/fermi_estimate.md"
+family = "evidence"
+delta_role = "scale_feasibility"
+contrarian_class = false
+
+[[brains]]
+id = "via_negativa"
+file = "brains/via_negativa.md"
+family = "minimalism"
+delta_role = "complexity_reduction"
+contrarian_class = false
+
+[[brains]]
+id = "ooda_tempo"
+file = "brains/ooda_tempo.md"
+family = "tempo"
+delta_role = "speed_under_uncertainty"
+contrarian_class = false
+
+[[brains]]
+id = "steelman_dialectic"
+file = "brains/steelman_dialectic.md"
+family = "dialectic"
+delta_role = "synthesis_ready_opposition"
+contrarian_class = false
+
+[[brains]]
+id = "red_team"
+file = "brains/red_team.md"
+family = "adversarial"
+delta_role = "hard_attack"
+contrarian_class = true
