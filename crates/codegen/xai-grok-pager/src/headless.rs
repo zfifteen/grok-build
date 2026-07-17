@@ -1325,7 +1325,7 @@ pub async fn run_single_turn(
                 // The -32003 data is the flattened server message; a
                 // free-usage 429 carries the well-known code inline there.
                 if crate::app::acp_error_is_free_usage_exhausted(&err) {
-                    crate::app::FREE_USAGE_USER_MESSAGE.to_string()
+                    crate::app::free_usage_user_message()
                 } else {
                     rate_limited_user_message(is_api_key_auth).to_string()
                 }

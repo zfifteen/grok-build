@@ -56,7 +56,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
 };
-pub(crate) use dispatch::{FREE_USAGE_USER_MESSAGE, acp_error_is_free_usage_exhausted};
+pub(crate) use dispatch::{free_usage_user_message, acp_error_is_free_usage_exhausted};
 pub use foreign_sessions::ForeignScanCoordinator;
 pub(crate) use foreign_sessions::{
     badge_for_picker_source, foreign_tool_display_label, is_foreign_picker_source,
@@ -1701,7 +1701,7 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "Grok Build TUI",
+                &format!("{} TUI", xai_grok_config::product_name()),
                 "",
                 "Usage: grok [OPTIONS] [PROMPT] [COMMAND]",
                 "",

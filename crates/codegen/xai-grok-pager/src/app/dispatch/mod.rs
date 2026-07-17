@@ -36,7 +36,7 @@ mod turn;
 mod voice;
 
 pub(crate) use billing::{
-    FREE_USAGE_USER_MESSAGE, UPSELL_URL_PAYG, UPSELL_URL_UPGRADE,
+    free_usage_user_message, UPSELL_URL_PAYG, UPSELL_URL_UPGRADE,
     acp_error_is_free_usage_exhausted, is_credit_limit_error, is_free_usage_exhausted_error,
 };
 pub(crate) use modes::{downgrade_displayed_auto_if_gated, effective_auto};

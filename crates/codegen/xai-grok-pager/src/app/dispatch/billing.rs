@@ -112,7 +112,12 @@ pub(crate) fn acp_error_is_free_usage_exhausted(err: &agent_client_protocol::Err
 /// User-facing message for free-usage exhaustion. Shown by headless mode and
 /// `format_acp_error` in place of auth-aware rate-limit copy. Deliberately
 /// promises no reset duration — the quota window is backend-config-driven.
-pub(crate) const FREE_USAGE_USER_MESSAGE: &str = "You\u{2019}ve reached your free Grok Build usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build";
+pub(crate) fn free_usage_user_message() -> String {
+    format!(
+        "You\u{2019}ve reached your free {} usage limit for now. Get SuperGrok for much higher limits, or try again later: https://grok.com/supergrok?referrer=grok-build",
+        xai_grok_config::product_name()
+    )
+}
 
 /// Open the credit-limit upsell on the given agent.
 ///
@@ -130,6 +135,10 @@ pub(super) fn open_credit_limit_upsell(
 ) {
     use crate::scrollback::blocks::CreditLimitCardAction;
 
+    let purchase_credits_desc = format!(
+        "Purchase credits to keep using {}",
+        xai_grok_config::product_name()
+    );
     let (
         heading,
         upgrade_tier_desc,
@@ -151,7 +160,7 @@ pub(super) fn open_credit_limit_upsell(
             "You hit your weekly limit.",
             "Upgrade to a higher tier for more usage",
             "Buy more credits",
-            "Purchase credits to keep using Grok Build",
+            purchase_credits_desc.as_str(),
             CreditLimitCardAction::PurchaseCredits,
             xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
             false,
@@ -328,7 +337,7 @@ fn open_supergrok_upsell(
         },
         QuestionOption {
             label: "Upgrade to SuperGrok Heavy".into(),
-            description: "Get the most out of Grok Build. Highest usage limits.".into(),
+            description: format!("Get the most out of {}. Highest usage limits.", xai_grok_config::product_name()),
             preview: None,
             // No Heavy-specific URL exists; the /supergrok page lists
             // both plans, so both upgrade options land there.

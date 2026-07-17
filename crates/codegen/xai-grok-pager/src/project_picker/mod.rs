@@ -78,9 +78,12 @@ pub fn build_project_question(
 
     ProjectQuestion {
         question: Question {
-            question: "Run Grok Build in a project directory?\n\n\
-                 This gives Grok Build full context of your codebase for better results."
-                .into(),
+            question: format!(
+                "Run {} in a project directory?\n\n\
+                 This gives {} full context of your codebase for better results.",
+                xai_grok_config::product_name(),
+                xai_grok_config::product_name(),
+            ),
             id: None,
             options,
             multi_select: Some(false),
