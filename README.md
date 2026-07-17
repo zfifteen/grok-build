@@ -18,6 +18,8 @@ not stock cosplay personas.
 [Layout](#repository-layout) ·
 [License](#license)
 
+![Power Grok — Expert · Heavy · Normal effort modes](docs/powergrok/assets/readme-hero.jpg)
+
 | Slash | Depth | Specialists |
 |-------|-------|-------------|
 | **`/normal`** | Default | Single leader — no fixed team |
