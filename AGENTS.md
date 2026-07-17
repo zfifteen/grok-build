@@ -59,42 +59,79 @@ xai-org/grok-build (upstream)
 | `origin` | `https://github.com/zfifteen/powergrok.git` | This fork (product + intake) |
 | `upstream` | `https://github.com/xai-org/grok-build.git` | Upstream source of truth for `main` |
 
-If `upstream` is missing:
+**Hard rule:** `upstream` must point at **xai-org/grok-build**, never at this fork. A dual-remote-to-fork layout silently hides true xAI updates.
+
+Heal / bootstrap:
 
 ```sh
-git remote add upstream https://github.com/xai-org/grok-build.git
+git remote set-url origin https://github.com/zfifteen/powergrok.git
+git remote set-url upstream https://github.com/xai-org/grok-build.git
+# optional: refuse accidental push to xAI
+git remote set-url --push upstream DISABLE_PUSH_USE_ORIGIN_ONLY
+# or:
+./bin/sync-upstream-intake.sh ensure-remotes
 ```
 
 ---
 
-## 3. Sync upstream into `main` (operator / agent recipe)
+## 3. Sync upstream without losing `powergrok` work
+
+**Full runbook (daily + first-time root republish, conflict hotspots, recovery):**  
+**[`docs/powergrok/UPSTREAM_INTAKE.md`](docs/powergrok/UPSTREAM_INTAKE.md)**  
+**Script:** [`bin/sync-upstream-intake.sh`](bin/sync-upstream-intake.sh)
+
+### Safety invariants (mandatory)
+
+1. **Product commits live only on `powergrok` (and feature branches).** Never put branding / effort / product docs on `main` — the next intake `reset --hard` drops them from `main` by design.
+2. **Intake never force-pushes `powergrok`.** Product tip moves only by merge commit (or feature PR merges).
+3. **Before any intake that rewrites `main` or merges into product, create a backup ref** (`backup/powergrok-<timestamp>`). Prefer also `git push -u origin backup/…`.
+4. **Force-push `main` only with explicit operator approval** (`--force-with-lease`), typically when xAI republished a new open-source root (no merge-base with old `main`).
+5. Prefer **merge** of `main` → `powergrok` over rebasing `powergrok` onto `main` so product SHAs stay stable for open PRs.
+
+### Daily happy path (after roots are aligned)
 
 ```sh
-git fetch upstream main
-git fetch origin main
-
-# main must match upstream tip (identical history)
-git checkout main
-git reset --hard upstream/main
-git push origin main
-# If histories diverged (different roots), force-push is required and needs
-# explicit operator approval: git push origin main --force-with-lease
+./bin/sync-upstream-intake.sh status
+./bin/sync-upstream-intake.sh full --apply
+# if only origin/main needs a non-fast-forward update after operator OK:
+# ./bin/sync-upstream-intake.sh intake-main --apply --i-approve-force-main
+git push origin powergrok   # after a clean product merge
+./bin/sync-upstream-intake.sh verify
 ```
 
-Then bring product current:
+### First-time / unrelated histories (root republish)
+
+When `git merge-base main upstream/main` is empty:
 
 ```sh
+./bin/sync-upstream-intake.sh backup --push-backup
+./bin/sync-upstream-intake.sh intake-main --apply --i-approve-force-main   # operator OK required
+./bin/sync-upstream-intake.sh merge-powergrok --apply --allow-unrelated
+# resolve conflicts → git push origin powergrok
+```
+
+Manual skeleton (same semantics):
+
+```sh
+git fetch upstream main && git fetch origin
+git branch "backup/powergrok-$(date +%Y%m%d-%H%M%S)" powergrok
+
+git checkout main
+git reset --hard upstream/main
+git push origin main   # or --force-with-lease with operator OK
+
 git checkout powergrok
-git merge main          # or open a PR: main → powergrok
+git merge main -m "chore(intake): merge upstream into powergrok"
+# if no merge-base: add --allow-unrelated-histories once
 git push origin powergrok
 ```
 
 Verify:
 
 ```sh
-# should be identical
-git rev-parse origin/main upstream/main
-# product may be ahead of main after local merges; main should not be ahead of powergrok without a pending merge
+./bin/sync-upstream-intake.sh verify
+# origin/main SHA == upstream/main SHA
+# main is ancestor of powergrok (or documented open merge)
 ```
 
 ---
@@ -144,17 +181,21 @@ Full plan, locked decisions, and peer-review amendments:
 
 ## 6. What “done” looks like for git health
 
+- [ ] `upstream` remote URL is `https://github.com/xai-org/grok-build.git` (not the fork).
 - [ ] `origin/main` SHA equals `upstream/main` SHA (or documented lag with a plan to sync).
 - [ ] GitHub **default branch** is `powergrok`.
 - [ ] Open product PRs use **base = `powergrok`**.
 - [ ] Topic branches share a merge-base with `powergrok` (GitHub “compare” works without “unrelated histories”).
-- [ ] Force-pushes to `main` / `powergrok` only happened with operator approval and a recovery note if PRs were affected.
+- [ ] Force-pushes to `main` only with operator approval; **`powergrok` not force-pushed for intake**.
+- [ ] A recent `backup/powergrok-*` ref exists before any root-jump intake.
+- [ ] `./bin/sync-upstream-intake.sh verify` passes after an intake cycle.
 
 ---
 
 ## 7. Scope of this file
 
 This `AGENTS.md` owns **fork workflow and Powergrok branch discipline** for this checkout.  
+Daily/root-republish **upstream intake** details: [`docs/powergrok/UPSTREAM_INTAKE.md`](docs/powergrok/UPSTREAM_INTAKE.md).  
 Upstream Grok Build coding style, crate layout, and product behavior remain as documented in the tree (README, crate docs, user guide). When implementing Powergrok isolation/install, treat `docs/powergrok/BUILD_PLAN.md` as the product contract.
 
-*Last updated: 2026-07-15 — dual-branch model (`main` = upstream intake, `powergrok` = product trunk).*
+*Last updated: 2026-07-17 — dual-branch model + safe daily upstream intake (backup, no force on powergrok).*
