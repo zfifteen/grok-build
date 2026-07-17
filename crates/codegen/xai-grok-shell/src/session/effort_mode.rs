@@ -208,12 +208,21 @@ impl EffortModeTracker {
         let mut t = Self::new(session_dir);
         t.mode = snapshot.mode;
         // Transient pursuit does not survive restart — sticky mode does.
+        // Mid-flight Pursuing/Aborting become Idle and re-gate writes.
+        // Terminal pursuits keep their unlock: PartialReport / Waived always
+        // unlock (abort path), and Idle restores the snapshot flag so a
+        // completed full-team synthesis still allows execute after resume.
         t.pursuit = match snapshot.pursuit {
             PursuitState::Pursuing | PursuitState::Aborting => PursuitState::Idle,
             other => other,
         };
         t.solo_waiver = snapshot.solo_waiver;
-        t.synthesis_complete = false;
+        t.synthesis_complete = match snapshot.pursuit {
+            PursuitState::PartialReport | PursuitState::Waived => true,
+            PursuitState::Pursuing | PursuitState::Aborting => false,
+            PursuitState::Idle => snapshot.synthesis_complete,
+        };
+        // Replace budgets are per team-run; resume starts a clean wave budget.
         t.replace_waves_used = 0;
         t.ledger = snapshot.ledger;
         t
@@ -288,6 +297,9 @@ impl EffortModeTracker {
     }
 
     /// Begin a fixed-team run for elevated modes (non-trivial, not solo).
+    ///
+    /// Selects reasoning brains (Expert: random 4; Heavy: all 16) and fills the
+    /// ledger with brain ids as roles so spawn/join reuse the same selection.
     pub fn begin_team_run(&mut self) -> Result<(), EffortGateError> {
         if !self.mode.is_elevated() {
             return Err(EffortGateError::IdleInNormal);
@@ -300,21 +312,30 @@ impl EffortModeTracker {
             .mode
             .team_size_default()
             .ok_or(EffortGateError::IdleInNormal)?;
+        let cfg = crate::session::effort_brains::load_effort_brain_config().map_err(|e| {
+            EffortGateError::BrainConfig(e.to_string())
+        })?;
+        let brain_ids =
+            crate::session::effort_brains::select_brain_ids(&cfg, self.mode).map_err(|e| {
+                EffortGateError::BrainConfig(e.to_string())
+            })?;
+        if brain_ids.len() != n {
+            return Err(EffortGateError::BrainConfig(format!(
+                "selected {} brains but mode expects N={n}",
+                brain_ids.len()
+            )));
+        }
         self.pursuit = PursuitState::Pursuing;
         self.synthesis_complete = false;
         self.replace_waves_used = 0;
         self.continue_wave_pending = false;
         self.ledger.clear();
-        for i in 0..n {
-            let role = if self.mode.requires_contrarian() && i == n - 1 {
-                format!("contrarian-{i}")
-            } else {
-                format!("specialist-{i}")
-            };
-            let mut row = SpecialistLedgerRow::new(i, role);
-            if self.mode.requires_contrarian() && i == n - 1 {
-                row.is_contrarian = true;
-            }
+        for (i, brain_id) in brain_ids.into_iter().enumerate() {
+            let spec = cfg.get(brain_id.as_str()).ok_or_else(|| {
+                EffortGateError::BrainConfig(format!("missing brain `{}`", brain_id.as_str()))
+            })?;
+            let mut row = SpecialistLedgerRow::new(i, brain_id.as_str());
+            row.is_contrarian = spec.contrarian_class;
             self.ledger.push(row);
         }
         Ok(())
@@ -470,6 +491,100 @@ impl EffortModeTracker {
         Ok(())
     }
 
+    /// Slot indices that are not yet counting toward N and may be replaced
+    /// (terminal non-success, under per-slot replace cap).
+    pub fn replaceable_slots(&self) -> Vec<usize> {
+        self.ledger
+            .iter()
+            .filter(|r| {
+                !r.outside_n
+                    && !r.counts_toward_n
+                    && !matches!(
+                        r.status,
+                        SpecialistStatus::Success
+                            | SpecialistStatus::Pending
+                            | SpecialistStatus::Running
+                    )
+                    && r.replaces < self.caps.max_replace_per_slot
+            })
+            .map(|r| r.slot)
+            .collect()
+    }
+
+    /// Prepare one automatic replace wave: reset replaceable failed slots to
+    /// Pending and increment the wave counter.
+    ///
+    /// Returns `true` when at least one slot is ready for re-spawn (so
+    /// [`needs_mandatory_fanout`] becomes true). Returns `false` when already
+    /// at hard-stop, still in-flight, already complete, or no slot can be
+    /// replaced under caps.
+    ///
+    /// When [`continue_wave_pending`] is set (user chose hard-stop `continue`),
+    /// consumes that grant and runs one extra wave even if the normal wave
+    /// budget is exhausted. Continue also re-allows one replace on slots that
+    /// already hit the per-slot cap so the extra wave is actually actionable.
+    pub fn try_prepare_replace_wave(&mut self) -> bool {
+        if self.pursuit != PursuitState::Pursuing || self.synthesis_complete {
+            return false;
+        }
+        if !self.all_fixed_slots_terminal() {
+            return false;
+        }
+        if self.can_claim_full_team().is_ok() {
+            return false;
+        }
+
+        // Hard-stop continue buys one wave past the normal cap.
+        if self.continue_wave_pending {
+            if self.begin_continue_wave().is_err() {
+                return false;
+            }
+            // Make the bought wave actionable: free one replace on terminal
+            // non-success slots that already sat at the per-slot cap.
+            for row in &mut self.ledger {
+                if row.outside_n || row.counts_toward_n {
+                    continue;
+                }
+                if matches!(
+                    row.status,
+                    SpecialistStatus::Success
+                        | SpecialistStatus::Pending
+                        | SpecialistStatus::Running
+                ) {
+                    continue;
+                }
+                if row.replaces >= self.caps.max_replace_per_slot {
+                    row.replaces = self.caps.max_replace_per_slot.saturating_sub(1);
+                }
+            }
+        } else if self.replace_waves_used >= self.caps.max_replace_waves {
+            return false;
+        }
+
+        let slots = self.replaceable_slots();
+        if slots.is_empty() {
+            // Nothing left to replace under per-slot caps — force hard-stop
+            // by exhausting the wave budget so UX and is_hard_stop agree.
+            if self.replace_waves_used < self.caps.max_replace_waves {
+                self.replace_waves_used = self.caps.max_replace_waves;
+            }
+            return false;
+        }
+
+        let mut any = false;
+        for slot in slots {
+            if self.replace_slot(slot).is_ok() {
+                any = true;
+            }
+        }
+        if any {
+            // Continue waves already sit at/above the hard-stop cap; still
+            // count the wave so bookkeeping stays monotonic.
+            self.mark_replace_wave();
+        }
+        any
+    }
+
     /// User abort: freeze ledger, no more automatic replaces.
     pub fn abort_team(&mut self) {
         if self.pursuit != PursuitState::Pursuing && self.pursuit != PursuitState::Aborting {
@@ -553,6 +668,14 @@ impl EffortModeTracker {
     ///
     /// Trivial tasks and solo waiver leave the ledger empty / Waived
     /// (writes stay allowed under elevated sticky mode).
+    ///
+    /// Dead-ledger recovery: when a prior join left all slots terminal but
+    /// short of N (and no continue-wave is pending), a new non-trivial turn
+    /// opens a fresh team so the session cannot stick write-blocked forever.
+    ///
+    /// Hard-stop `continue`: if the user message is a continue grant while
+    /// hard-stopped, sets [`continue_wave_pending`] so the mandatory fan-out
+    /// path can run one extra replace wave (tech-spec §4.4).
     /// Returns whether a new team run was begun.
     pub fn on_session_turn_start(&mut self, task_text: &str) -> Result<bool, EffortGateError> {
         if !self.mode.is_elevated() {
@@ -562,13 +685,35 @@ impl EffortModeTracker {
             self.pursuit = PursuitState::Waived;
             return Ok(false);
         }
+        // Hard-stop continue grant (before trivial short-circuit so "continue"
+        // is never treated as a trivial waived turn).
+        if is_hard_stop_continue_request(task_text) && self.is_hard_stop() {
+            let _ = self.hard_stop_continue();
+            return Ok(false);
+        }
         if is_trivial_task(task_text) {
             // Trivial short-circuit: Waived so write tools stay available.
             self.pursuit = PursuitState::Waived;
             return Ok(false);
         }
-        // Already pursuing — keep the open run.
+        // Already pursuing with an open (non-terminal) run — keep it.
         if self.pursuit == PursuitState::Pursuing && !self.ledger.is_empty() {
+            // Continue grant: leave ledger so fan-out can re-spawn replaced slots.
+            if self.continue_wave_pending {
+                return Ok(false);
+            }
+            // In-flight specialists still running/pending — do not reset.
+            if !self.all_fixed_slots_terminal() {
+                return Ok(false);
+            }
+            // Dead short team (all terminal, S < N, no pending continue):
+            // reopen a fresh team so the next fan-out can unlock writes.
+            // Hard-stop UX already offered continue/--solo; a new user turn
+            // is treated as a new attempt under sticky elevated mode.
+            if !self.synthesis_complete {
+                self.begin_team_run()?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         // Fresh non-trivial work under elevated mode → open N slots.
@@ -801,6 +946,88 @@ impl EffortModeTracker {
         })
     }
 
+    /// Build briefs only for unbound Pending fixed-team slots (replace waves
+    /// and partial re-spawns). Full-team planning uses the same path so Expert
+    /// brain selection stays fixed on the ledger from [`Self::begin_team_run`].
+    pub fn pending_slot_briefs(&self, task_text: &str) -> Vec<SpecialistBrief> {
+        if self.pursuit != PursuitState::Pursuing {
+            return Vec::new();
+        }
+        let n = self.target_n().unwrap_or(self.ledger.len());
+        let cfg = match crate::session::effort_brains::load_effort_brain_config() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "effort brains: load failed for pending briefs");
+                return Vec::new();
+            }
+        };
+        self.ledger
+            .iter()
+            .filter(|r| {
+                !r.outside_n
+                    && r.task_id.is_none()
+                    && matches!(r.status, SpecialistStatus::Pending)
+            })
+            .filter_map(|r| {
+                let spec = cfg.get(&r.role).or_else(|| {
+                    tracing::warn!(role = %r.role, "effort brains: unknown ledger role");
+                    None
+                })?;
+                Some(SpecialistBrief {
+                    slot: r.slot,
+                    role: r.role.clone(),
+                    is_contrarian: r.is_contrarian || spec.contrarian_class,
+                    description: crate::session::effort_brains::brain_description(
+                        self.mode, r.slot, n, spec,
+                    ),
+                    prompt: crate::session::effort_brains::render_specialist_prompt(
+                        self.mode, r.slot, n, task_text, spec, true,
+                    ),
+                    brain_id: spec.id.as_str().to_string(),
+                    model_override: if cfg.allow_model_overrides {
+                        spec.model.clone()
+                    } else {
+                        None
+                    },
+                })
+            })
+            .collect()
+    }
+
+    /// Whether a specialist report body is non-empty enough to count toward N
+    /// (tech-spec §4.1: empty "ok" / whitespace-only must not count).
+    pub fn report_body_counts_toward_n(body: &str) -> bool {
+        let t = body.trim();
+        if t.is_empty() {
+            return false;
+        }
+        // Thin placeholders that are not task-relevant reports.
+        let lower = t.to_ascii_lowercase();
+        !matches!(
+            lower.as_str(),
+            "ok" | "okay" | "done" | "success" | "yes" | "no" | "n/a" | "none"
+        )
+    }
+
+    /// Map a join result (success flag + body + cancelled) to ledger status.
+    pub fn specialist_status_from_join(
+        success: bool,
+        cancelled: bool,
+        body: &str,
+    ) -> SpecialistStatus {
+        if cancelled {
+            return SpecialistStatus::Cancelled;
+        }
+        if !success {
+            return SpecialistStatus::Failed;
+        }
+        if Self::report_body_counts_toward_n(body) {
+            SpecialistStatus::Success
+        } else {
+            SpecialistStatus::EmptyReport
+        }
+    }
+
     /// Snapshot fields for TUI chrome (mode pill + S of N + Partial/Waived).
     pub fn chrome_state(&self) -> EffortChromeState {
         EffortChromeState {
@@ -809,38 +1036,62 @@ impl EffortModeTracker {
             successful: self.successful_count(),
             target_n: self.target_n(),
             solo_waiver: self.solo_waiver,
+            brain_hint: self.chrome_brain_hint(),
         }
+    }
+
+    /// Brain id for chrome: prefer in-flight Running, else next Pending, else last Success.
+    fn chrome_brain_hint(&self) -> Option<String> {
+        if !self.mode.is_elevated() || self.solo_waiver {
+            return None;
+        }
+        if let Some(r) = self.ledger.iter().find(|r| {
+            !r.outside_n && matches!(r.status, SpecialistStatus::Running)
+        }) {
+            return Some(r.role.clone());
+        }
+        if let Some(r) = self.ledger.iter().find(|r| {
+            !r.outside_n
+                && matches!(r.status, SpecialistStatus::Pending)
+                && r.task_id.is_none()
+        }) {
+            return Some(r.role.clone());
+        }
+        self.ledger
+            .iter()
+            .rev()
+            .find(|r| !r.outside_n && matches!(r.status, SpecialistStatus::Success))
+            .map(|r| r.role.clone())
     }
 }
 
 // ── TUI chrome labels (pure) ───────────────────────────────────────────────
 
 /// Effort fields the TUI needs for the status-bar chip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffortChromeState {
     pub mode: EffortMode,
     pub pursuit: PursuitState,
     pub successful: usize,
     pub target_n: Option<usize>,
     pub solo_waiver: bool,
+    /// Active / next / last brain id for elevated team runs.
+    pub brain_hint: Option<String>,
 }
 
 impl EffortChromeState {
     /// Status-bar label from shell effort state, or `None` when Normal
     /// (elevated chrome must disappear).
     ///
-    /// Examples: `Expert`, `Expert 2 of 4`, `Heavy Partial 3 of 16`,
+    /// Examples: `Expert`, `Expert 2 of 4 · bayesian_update`, `Heavy Partial 3 of 16`,
     /// `Expert Waived`.
     pub fn status_label(self) -> Option<String> {
-        format_effort_chrome_label(self)
+        format_effort_chrome_label(&self)
     }
 }
 
 /// Format the durable TUI effort chrome label from shipped tracker fields.
-///
-/// Drive this helper from unit tests and from the wire payload builder so
-/// progress math is not reimplemented in the pager.
-pub fn format_effort_chrome_label(state: EffortChromeState) -> Option<String> {
+pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
     if !state.mode.is_elevated() {
         return None;
     }
@@ -854,22 +1105,28 @@ pub fn format_effort_chrome_label(state: EffortChromeState) -> Option<String> {
     }
     let n = state.target_n.unwrap_or(0);
     let s = state.successful;
-    match state.pursuit {
+    let base = match state.pursuit {
         PursuitState::PartialReport => {
             if n > 0 {
-                Some(format!("{name} Partial {s} of {n}"))
+                format!("{name} Partial {s} of {n}")
             } else {
-                Some(format!("{name} Partial"))
+                format!("{name} Partial")
             }
         }
         PursuitState::Pursuing | PursuitState::Aborting => {
             if n > 0 {
-                Some(format!("{name} {s} of {n}"))
+                format!("{name} {s} of {n}")
             } else {
-                Some(name.to_string())
+                name.to_string()
             }
         }
-        PursuitState::Idle | PursuitState::Waived => Some(name.to_string()),
+        PursuitState::Idle | PursuitState::Waived => name.to_string(),
+    };
+    match &state.brain_hint {
+        Some(b) if !b.is_empty() && matches!(state.pursuit, PursuitState::Pursuing | PursuitState::Aborting | PursuitState::PartialReport) => {
+            Some(format!("{base} · {b}"))
+        }
+        _ => Some(base),
     }
 }
 
@@ -882,10 +1139,11 @@ pub struct EffortChromeWire {
     pub successful: usize,
     pub target_n: Option<usize>,
     pub solo_waiver: bool,
+    pub brain_hint: Option<String>,
 }
 
 impl EffortChromeState {
-    pub fn to_wire(self) -> EffortChromeWire {
+    pub fn to_wire(&self) -> EffortChromeWire {
         EffortChromeWire {
             mode: self.mode.as_str().to_string(),
             pursuit: match self.pursuit {
@@ -900,6 +1158,7 @@ impl EffortChromeState {
             successful: self.successful,
             target_n: self.target_n,
             solo_waiver: self.solo_waiver,
+            brain_hint: self.brain_hint.clone(),
         }
     }
 }
@@ -914,81 +1173,73 @@ pub struct SpecialistBrief {
     pub is_contrarian: bool,
     pub description: String,
     pub prompt: String,
+    /// Reasoning-brain id (same as `role` when brains are wired).
+    pub brain_id: String,
+    /// Optional model override from brain catalog (only if allow_model_overrides).
+    pub model_override: Option<String>,
 }
 
 /// Build N specialist briefs for a mandatory team run under `mode`.
 ///
-/// Expert → 4; Heavy → 16 with the last slot marked contrarian.
-/// Returns empty when mode is Normal.
+/// Loads the effort-brain catalog, selects ids (Expert random 4 / Heavy all 16),
+/// and renders protocol prompts. Prefer [`EffortModeTracker::pending_slot_briefs`]
+/// in production after [`EffortModeTracker::begin_team_run`] so Expert selection
+/// is fixed on the ledger.
+///
+/// Returns empty when mode is Normal, or when brain config fails (logs error).
 pub fn build_specialist_briefs(mode: EffortMode, task_text: &str) -> Vec<SpecialistBrief> {
     let Some(n) = mode.team_size_default() else {
         return Vec::new();
     };
-    let task = task_text.trim();
-    let task = if task.is_empty() {
-        "(no task text — analyze the current session context and codebase)"
-    } else {
-        task
+    let cfg = match crate::session::effort_brains::load_effort_brain_config() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "effort brains: cannot build specialist briefs");
+            return Vec::new();
+        }
     };
-    let mode_name = mode.as_str();
-    (0..n)
-        .map(|i| {
-            let is_contrarian = mode.requires_contrarian() && i == n - 1;
-            let role = if is_contrarian {
-                format!("contrarian-{i}")
-            } else {
-                format!("specialist-{i}")
-            };
-            let description = if is_contrarian {
-                format!("{mode_name} contrarian specialist {i}/{n}")
-            } else {
-                format!("{mode_name} specialist {i}/{n}")
-            };
-            let angle = specialist_angle(i, n, is_contrarian);
-            let prompt = format!(
-                "You are specialist slot {i} of {n} on a **mandatory** {mode_name} effort-mode \
-                 analytic team (join-all). The shell launched you; do not spawn further subagents.\n\
-                 \n\
-                 **Role:** {role}\n\
-                 **Analytic angle:** {angle}\n\
-                 \n\
-                 **User task:**\n{task}\n\
-                 \n\
-                 Produce a structured specialist report: findings, evidence (paths/symbols), \
-                 risks, and an independent verdict. Stay analytic and non-writing \
-                 (read/search only). End with a short summary the lead agent can synthesize."
-            );
-            SpecialistBrief {
+    let brain_ids = match crate::session::effort_brains::select_brain_ids(&cfg, mode) {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::error!(error = %e, "effort brains: selection failed");
+            return Vec::new();
+        }
+    };
+    if brain_ids.len() != n {
+        tracing::error!(
+            selected = brain_ids.len(),
+            n,
+            "effort brains: selection size mismatch"
+        );
+        return Vec::new();
+    }
+    brain_ids
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, brain_id)| {
+            let spec = cfg.get(brain_id.as_str())?;
+            Some(SpecialistBrief {
                 slot: i,
-                role,
-                is_contrarian,
-                description,
-                prompt,
-            }
+                role: brain_id.as_str().to_string(),
+                is_contrarian: spec.contrarian_class,
+                description: crate::session::effort_brains::brain_description(mode, i, n, spec),
+                prompt: crate::session::effort_brains::render_specialist_prompt(
+                    mode, i, n, task_text, spec, false,
+                ),
+                brain_id: brain_id.as_str().to_string(),
+                model_override: if cfg.allow_model_overrides {
+                    spec.model.clone()
+                } else {
+                    None
+                },
+            })
         })
         .collect()
 }
 
-fn specialist_angle(slot: usize, n: usize, is_contrarian: bool) -> &'static str {
-    if is_contrarian {
-        return "Contrarian: challenge assumptions, find holes, argue the strongest case against the leading approach";
-    }
-    // Cycle distinct angles so N=4 and N=16 both get diversity without N templates.
-    match slot % 4 {
-        0 => "Correctness / verification: invariants, edge cases, tests, failure modes",
-        1 => "Architecture / design: structure, coupling, alternatives, migration risk",
-        2 => "Implementation / ops: build, integration, performance, operability",
-        _ => {
-            if n > 4 && slot >= n / 2 {
-                "Synthesis prep: cross-cut gaps, residual risks, readiness criteria"
-            } else {
-                "Product / UX / operator impact: clarity, observability, user-visible behavior"
-            }
-        }
-    }
-}
-
 /// Format joined specialist reports for injection into the leader turn.
+///
+/// Requires a **disagreement-oriented** synthesis (method deltas), not a bland average.
 pub fn format_team_report_package(
     mode: EffortMode,
     progress: &str,
@@ -996,18 +1247,32 @@ pub fn format_team_report_package(
 ) -> String {
     let mode_name = mode.as_str();
     let mut out = format!(
-        "Effort mode: {mode_name} — **mandatory team complete** ({progress}). \
-         Synthesize these specialist reports into your answer. Do not re-run the fixed team.\n"
+        "Effort mode: {mode_name} — **mandatory team complete** ({progress}).\n\
+         Specialists used **distinct reasoning brains** (method protocols). \
+         Synthesize by comparing methods — do **not** paper over conflicts. \
+         Do not re-run the fixed team.\n\
+         \n\
+         After reading all reports, structure your answer with these sections:\n\
+         ## Consensus (multi-brain)\n\
+         ## Conflicts (brain A vs brain B — do not paper over)\n\
+         ## Unique contributions (single-brain claims)\n\
+         ## Residuals / unknowns\n\
+         ## Decision (cite brain ids)\n"
     );
     for (brief, body) in reports {
         let tag = if brief.is_contrarian {
-            "contrarian"
+            "contrarian-brain"
         } else {
-            "specialist"
+            "brain"
+        };
+        let bid = if brief.brain_id.is_empty() {
+            brief.role.as_str()
+        } else {
+            brief.brain_id.as_str()
         };
         out.push_str(&format!(
-            "\n--- {tag} slot {} ({}) ---\n{}\n",
-            brief.slot, brief.role, body
+            "\n--- {tag} slot {} ({bid}) ---\n{}\n",
+            brief.slot, body
         ));
     }
     out
@@ -1030,6 +1295,8 @@ pub enum EffortGateError {
     ReplaceSuccessForbidden(usize),
     NotHardStopped,
     NoContinueWave,
+    /// Effort-brain catalog/selection failed (fail loud; no angle fallback).
+    BrainConfig(String),
 }
 
 impl std::fmt::Display for EffortGateError {
@@ -1051,7 +1318,10 @@ impl std::fmt::Display for EffortGateError {
                 write!(f, "execute/write blocked until after team synthesis")
             }
             Self::PlanBlocksExecute => {
-                write!(f, "Plan mode + Effort: non-writing until plan allows execute")
+                write!(
+                    f,
+                    "Plan mode + Effort: non-writing until plan allows execute"
+                )
             }
             Self::UnknownSlot(s) => write!(f, "unknown specialist slot {s}"),
             Self::ReplaceCap { slot, cap } => {
@@ -1062,6 +1332,7 @@ impl std::fmt::Display for EffortGateError {
             }
             Self::NotHardStopped => write!(f, "not in hard-stop state"),
             Self::NoContinueWave => write!(f, "no pending continue wave"),
+            Self::BrainConfig(detail) => write!(f, "effort brain config error: {detail}"),
         }
     }
 }
@@ -1119,6 +1390,23 @@ pub fn is_trivial_task(task: &str) -> bool {
             || t == "thanks")
 }
 
+/// User message that grants one hard-stop replace wave (tech-spec §4.4).
+pub fn is_hard_stop_continue_request(task: &str) -> bool {
+    let t = task.trim().to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "continue"
+            | "continue."
+            | "continue!"
+            | "yes continue"
+            | "keep going"
+            | "retry"
+            | "retry failed"
+            | "one more wave"
+            | "replace wave"
+    )
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1171,6 +1459,144 @@ mod tests {
         let snap = t.snapshot();
         let restored = EffortModeTracker::from_snapshot(tmp(), snap);
         assert_eq!(restored.mode(), EffortMode::Heavy);
+    }
+
+    #[test]
+    fn snapshot_restores_synthesis_after_partial_and_full() {
+        // Partial abort unlock must survive resume.
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        t.record_outcome(0, SpecialistStatus::Success, Some("a".into()))
+            .unwrap();
+        t.abort_team();
+        t.mark_partial_synthesis();
+        assert!(t.synthesis_complete());
+        assert!(t.may_execute_writes(false).is_ok());
+        let snap = t.snapshot();
+        let restored = EffortModeTracker::from_snapshot(tmp(), snap);
+        assert_eq!(restored.pursuit(), PursuitState::PartialReport);
+        assert!(restored.synthesis_complete());
+        assert!(restored.may_execute_writes(false).is_ok());
+
+        // Full-team Idle + synthesis_complete must survive resume.
+        let mut full = EffortModeTracker::new(tmp());
+        full.set_mode(EffortMode::Expert, false);
+        full.begin_team_run().unwrap();
+        for i in 0..4 {
+            full.record_outcome(i, SpecialistStatus::Success, Some(format!("t{i}")))
+                .unwrap();
+        }
+        full.mark_synthesis_complete().unwrap();
+        let snap = full.snapshot();
+        let restored = EffortModeTracker::from_snapshot(tmp(), snap);
+        assert_eq!(restored.pursuit(), PursuitState::Idle);
+        assert!(restored.synthesis_complete());
+        assert!(restored.may_execute_writes(false).is_ok());
+    }
+
+    #[test]
+    fn short_terminal_team_reopens_on_next_turn() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        for i in 0..4 {
+            t.record_outcome(i, SpecialistStatus::Failed, None).unwrap();
+        }
+        assert!(t.all_fixed_slots_terminal());
+        assert!(!t.synthesis_complete());
+        assert!(matches!(
+            t.may_execute_writes(false),
+            Err(EffortGateError::ExecuteBeforeSynthesis)
+        ));
+        // Next non-trivial turn must not stick: reopen fresh team.
+        assert!(t
+            .on_session_turn_start("architect multi-file auth migration")
+            .unwrap());
+        assert_eq!(t.pursuit(), PursuitState::Pursuing);
+        assert!(t.needs_mandatory_fanout());
+        assert_eq!(t.successful_count(), 0);
+        assert!(t.ledger().iter().all(|r| r.status == SpecialistStatus::Pending));
+    }
+
+    #[test]
+    fn replace_wave_prepares_failed_slots() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        t.record_outcome(0, SpecialistStatus::Success, Some("ok".into()))
+            .unwrap();
+        t.record_outcome(1, SpecialistStatus::Failed, None).unwrap();
+        t.record_outcome(2, SpecialistStatus::EmptyReport, None)
+            .unwrap();
+        t.record_outcome(3, SpecialistStatus::Timeout, None).unwrap();
+        assert!(t.try_prepare_replace_wave());
+        assert_eq!(t.replaceable_slots().len(), 0); // already Pending
+        assert!(t.needs_mandatory_fanout());
+        let pending: Vec<_> = t
+            .ledger()
+            .iter()
+            .filter(|r| r.status == SpecialistStatus::Pending)
+            .map(|r| r.slot)
+            .collect();
+        assert_eq!(pending, vec![1, 2, 3]);
+        // Success slot untouched.
+        assert_eq!(t.ledger()[0].status, SpecialistStatus::Success);
+        assert_eq!(t.successful_count(), 1);
+    }
+
+    #[test]
+    fn empty_join_body_maps_to_empty_report() {
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(true, false, "ok"),
+            SpecialistStatus::EmptyReport
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(true, false, "   "),
+            SpecialistStatus::EmptyReport
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(
+                true,
+                false,
+                "Findings: auth middleware lacks timeout."
+            ),
+            SpecialistStatus::Success
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(false, true, "cancelled"),
+            SpecialistStatus::Cancelled
+        );
+        assert!(!EffortModeTracker::report_body_counts_toward_n("ok"));
+        assert!(EffortModeTracker::report_body_counts_toward_n(
+            "risk: shared .grok tree"
+        ));
+    }
+
+    #[test]
+    fn hard_stop_continue_request_grants_wave() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        for i in 0..4 {
+            t.record_outcome(i, SpecialistStatus::Failed, None).unwrap();
+        }
+        // Exhaust replace budget without free slots left (per-slot cap).
+        assert!(t.try_prepare_replace_wave()); // wave 1
+        for i in 0..4 {
+            t.record_outcome(i, SpecialistStatus::Failed, Some(format!("r{i}")))
+                .unwrap();
+        }
+        // Wave 2: per-slot cap exhausted → forced hard-stop.
+        assert!(!t.try_prepare_replace_wave());
+        assert!(t.is_hard_stop());
+        assert!(t
+            .on_session_turn_start("continue")
+            .unwrap()
+            == false);
+        // continue_wave_pending set; is_hard_stop false until wave launches.
+        assert!(!t.is_hard_stop());
+        assert!(t.try_prepare_replace_wave()); // consumes continue
     }
 
     #[test]
@@ -1441,36 +1867,28 @@ mod tests {
 
     #[test]
     fn specialist_briefs_expert_n4_and_heavy_n16() {
+        unsafe { std::env::set_var(crate::session::effort_brains::EFFORT_BRAIN_SEED_ENV, "7") };
         let expert = build_specialist_briefs(EffortMode::Expert, "audit auth");
+        unsafe { std::env::remove_var(crate::session::effort_brains::EFFORT_BRAIN_SEED_ENV) };
         assert_eq!(expert.len(), 4);
-        assert!(expert.iter().all(|b| !b.is_contrarian));
         assert!(expert[0].prompt.contains("audit auth"));
-        assert!(expert[0].description.contains("expert specialist"));
+        assert!(expert[0].prompt.contains("Brain protocol"));
+        assert!(expert[0].prompt.contains("non-writing"));
+        // roles are brain ids, not specialist-i
+        assert!(!expert[0].role.starts_with("specialist-"));
+        let mut ids: Vec<_> = expert.iter().map(|b| b.brain_id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 4);
 
         let heavy = build_specialist_briefs(EffortMode::Heavy, "deep audit");
         assert_eq!(heavy.len(), 16);
+        assert_eq!(heavy[15].role, "red_team");
         assert!(heavy[15].is_contrarian);
-        assert_eq!(heavy[15].role, "contrarian-15");
-        assert!(heavy[15].prompt.contains("Contrarian"));
-        assert!(heavy.iter().take(15).all(|b| !b.is_contrarian));
+        assert!(heavy[15].prompt.contains("red_team"));
+        assert!(heavy.iter().filter(|b| b.is_contrarian).count() >= 1);
 
         assert!(build_specialist_briefs(EffortMode::Normal, "x").is_empty());
-    }
-
-    #[test]
-    fn needs_mandatory_fanout_while_pending_unbound() {
-        let mut t = EffortModeTracker::new(tmp());
-        t.set_mode(EffortMode::Expert, false);
-        assert!(!t.needs_mandatory_fanout());
-        t.begin_team_run().unwrap();
-        assert!(t.needs_mandatory_fanout());
-        // Bind one slot — still needs fanout for remaining.
-        assert_eq!(t.assign_next_pending_task("s0"), Some(0));
-        assert!(t.needs_mandatory_fanout());
-        for i in 1..4 {
-            assert_eq!(t.assign_next_pending_task(format!("s{i}")), Some(i));
-        }
-        assert!(!t.needs_mandatory_fanout());
     }
 
     #[test]
@@ -1484,7 +1902,38 @@ mod tests {
         let pkg = format_team_report_package(EffortMode::Expert, "4 of 4", &reports);
         assert!(pkg.contains("mandatory team complete"));
         assert!(pkg.contains("report-0"));
+        assert!(pkg.contains("Conflicts"));
+        assert!(pkg.contains("Decision (cite brain ids)"));
         assert!(pkg.contains("slot 3"));
+    }
+
+    #[test]
+    fn begin_team_run_uses_brain_ids_on_ledger() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Heavy, false);
+        t.begin_team_run().unwrap();
+        assert_eq!(t.ledger().len(), 16);
+        assert_eq!(t.ledger()[0].role, "first_principles");
+        assert_eq!(t.ledger()[15].role, "red_team");
+        assert!(t.ledger()[15].is_contrarian);
+        let pending = t.pending_slot_briefs("task");
+        assert_eq!(pending.len(), 16);
+        assert!(pending[0].prompt.contains("first_principles"));
+    }
+
+    #[test]
+    fn needs_mandatory_fanout_while_pending_unbound() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        assert!(!t.needs_mandatory_fanout());
+        t.begin_team_run().unwrap();
+        assert!(t.needs_mandatory_fanout());
+        assert_eq!(t.assign_next_pending_task("s0"), Some(0));
+        assert!(t.needs_mandatory_fanout());
+        for i in 1..4 {
+            assert_eq!(t.assign_next_pending_task(format!("s{i}")), Some(i));
+        }
+        assert!(!t.needs_mandatory_fanout());
     }
 
     #[test]
@@ -1501,19 +1950,20 @@ mod tests {
     fn chrome_label_expert_heavy_progress_partial_waived_normal_clears() {
         // Normal → no elevated chrome.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Normal,
                 pursuit: PursuitState::Idle,
                 successful: 0,
                 target_n: None,
                 solo_waiver: false,
+                brain_hint: None,
             }),
             None
         );
 
         // Sticky Expert idle → mode name only.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Idle,
                 successful: 0,
@@ -1525,17 +1975,18 @@ mod tests {
 
         // Pursuing with S of N.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Pursuing,
                 successful: 2,
                 target_n: Some(4),
                 solo_waiver: false,
+                brain_hint: None,
             }),
             Some("Expert 2 of 4".into())
         );
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Heavy,
                 pursuit: PursuitState::Pursuing,
                 successful: 12,
@@ -1547,17 +1998,18 @@ mod tests {
 
         // Partial / Waived.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Heavy,
                 pursuit: PursuitState::PartialReport,
                 successful: 3,
                 target_n: Some(16),
                 solo_waiver: false,
+                brain_hint: None,
             }),
             Some("Heavy Partial 3 of 16".into())
         );
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Waived,
                 successful: 0,
@@ -1567,12 +2019,13 @@ mod tests {
             Some("Expert Waived".into())
         );
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Idle,
                 successful: 0,
                 target_n: Some(4),
                 solo_waiver: true,
+                brain_hint: None,
             }),
             Some("Expert Waived".into())
         );

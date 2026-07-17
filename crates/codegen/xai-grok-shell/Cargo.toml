@@ -56,6 +56,7 @@ tokio-stream = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "process",

@@ -49,6 +49,9 @@ pub async fn spawn_specialist(
         runtime_overrides: SubagentRuntimeOverrides {
             // Analytic-only fixed team: read/search, no writes.
             capability_mode: Some(SubagentCapabilityMode::ReadOnly),
+            model: brief.model_override.clone(),
+            model_override_provenance:
+                xai_grok_tools::implementations::grok_build::task::types::ModelOverrideProvenance::Harness,
             ..Default::default()
         },
         // Await via oneshot; still surfaces in TUI via spawn notifications.
@@ -93,6 +96,8 @@ fn join_from_result(
             .error
             .unwrap_or_else(|| "specialist failed without error text".to_string())
     };
+    // Preserve the raw subagent success flag; empty-body demotion to
+    // EmptyReport happens in `specialist_status_from_join` (tech-spec §4.1).
     SpecialistJoinResult {
         brief,
         task_id,
@@ -112,6 +117,17 @@ pub struct PlannedSpecialist {
 /// Build N planned specialists with fresh UUIDs (call before ledger bind + spawn).
 pub fn plan_mandatory_team(mode: EffortMode, task_text: &str) -> Vec<PlannedSpecialist> {
     build_specialist_briefs(mode, task_text)
+        .into_iter()
+        .map(|brief| PlannedSpecialist {
+            task_id: uuid::Uuid::now_v7().to_string(),
+            brief,
+        })
+        .collect()
+}
+
+/// Plan spawns for already-Pending unbound slots (replace / recovery waves).
+pub fn plan_pending_slots(briefs: Vec<SpecialistBrief>) -> Vec<PlannedSpecialist> {
+    briefs
         .into_iter()
         .map(|brief| PlannedSpecialist {
             task_id: uuid::Uuid::now_v7().to_string(),
@@ -187,7 +203,7 @@ mod tests {
         assert_eq!(ok.body, "hello");
 
         let err = join_from_result(
-            brief,
+            brief.clone(),
             "id-2".into(),
             SubagentResult {
                 success: false,
@@ -199,5 +215,45 @@ mod tests {
         assert!(!err.success);
         assert!(err.cancelled);
         assert_eq!(err.body, "boom");
+
+        // Empty / thin bodies demote to EmptyReport via status mapper.
+        use crate::session::effort_mode::EffortModeTracker;
+        use crate::session::effort_mode::SpecialistStatus;
+        let empty = join_from_result(
+            brief.clone(),
+            "id-3".into(),
+            SubagentResult {
+                success: true,
+                output: std::sync::Arc::from("   "),
+                ..Default::default()
+            },
+        );
+        assert!(empty.success); // raw subagent flag
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(
+                empty.success,
+                empty.cancelled,
+                &empty.body
+            ),
+            SpecialistStatus::EmptyReport
+        );
+
+        let thin_ok = join_from_result(
+            brief,
+            "id-4".into(),
+            SubagentResult {
+                success: true,
+                output: std::sync::Arc::from("ok"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(
+                thin_ok.success,
+                thin_ok.cancelled,
+                &thin_ok.body
+            ),
+            SpecialistStatus::EmptyReport
+        );
     }
 }
