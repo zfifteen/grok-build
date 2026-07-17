@@ -22,11 +22,15 @@
 pub mod defaults;
 pub mod error;
 pub mod load;
+pub mod prompt;
+pub mod select;
 pub mod types;
 pub mod validate;
 
 pub use error::EffortBrainError;
 pub use load::{load_effort_brain_config, load_effort_brain_config_from_layers};
+pub use prompt::{brain_description, render_specialist_prompt};
+pub use select::{select_brain_ids, EFFORT_BRAIN_SEED_ENV};
 pub use types::{
     BrainId, BrainSpec, EffortBrainConfig, RosterMode, RosterSelection, BRAIN_COUNT_HEAVY,
     EXPERT_K_DEFAULT,

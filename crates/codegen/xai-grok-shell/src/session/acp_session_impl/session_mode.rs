@@ -478,19 +478,14 @@ impl SessionActor {
         let parent_session_id = self.session_info.id.0.to_string();
 
         // Full team or only Pending recovery slots (replace wave).
+        // Always build from the ledger so Expert brain selection is not re-rolled.
         let planned = {
             let tracker = self.effort_mode.lock();
             let pending = tracker.pending_slot_briefs(task_text);
-            let full_n = mode.team_size_default().unwrap_or(0);
-            if pending.len() == full_n && full_n > 0 {
-                // Fresh full team — use the standard planner (same briefs).
-                drop(tracker);
-                crate::session::effort_team::plan_mandatory_team(mode, task_text)
-            } else if !pending.is_empty() {
-                crate::session::effort_team::plan_pending_slots(pending)
-            } else {
+            if pending.is_empty() {
                 return;
             }
+            crate::session::effort_team::plan_pending_slots(pending)
         };
         if planned.is_empty() {
             return;

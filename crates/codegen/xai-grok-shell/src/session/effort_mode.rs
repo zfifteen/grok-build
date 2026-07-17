@@ -297,6 +297,9 @@ impl EffortModeTracker {
     }
 
     /// Begin a fixed-team run for elevated modes (non-trivial, not solo).
+    ///
+    /// Selects reasoning brains (Expert: random 4; Heavy: all 16) and fills the
+    /// ledger with brain ids as roles so spawn/join reuse the same selection.
     pub fn begin_team_run(&mut self) -> Result<(), EffortGateError> {
         if !self.mode.is_elevated() {
             return Err(EffortGateError::IdleInNormal);
@@ -309,21 +312,30 @@ impl EffortModeTracker {
             .mode
             .team_size_default()
             .ok_or(EffortGateError::IdleInNormal)?;
+        let cfg = crate::session::effort_brains::load_effort_brain_config().map_err(|e| {
+            EffortGateError::BrainConfig(e.to_string())
+        })?;
+        let brain_ids =
+            crate::session::effort_brains::select_brain_ids(&cfg, self.mode).map_err(|e| {
+                EffortGateError::BrainConfig(e.to_string())
+            })?;
+        if brain_ids.len() != n {
+            return Err(EffortGateError::BrainConfig(format!(
+                "selected {} brains but mode expects N={n}",
+                brain_ids.len()
+            )));
+        }
         self.pursuit = PursuitState::Pursuing;
         self.synthesis_complete = false;
         self.replace_waves_used = 0;
         self.continue_wave_pending = false;
         self.ledger.clear();
-        for i in 0..n {
-            let role = if self.mode.requires_contrarian() && i == n - 1 {
-                format!("contrarian-{i}")
-            } else {
-                format!("specialist-{i}")
-            };
-            let mut row = SpecialistLedgerRow::new(i, role);
-            if self.mode.requires_contrarian() && i == n - 1 {
-                row.is_contrarian = true;
-            }
+        for (i, brain_id) in brain_ids.into_iter().enumerate() {
+            let spec = cfg.get(brain_id.as_str()).ok_or_else(|| {
+                EffortGateError::BrainConfig(format!("missing brain `{}`", brain_id.as_str()))
+            })?;
+            let mut row = SpecialistLedgerRow::new(i, brain_id.as_str());
+            row.is_contrarian = spec.contrarian_class;
             self.ledger.push(row);
         }
         Ok(())
@@ -935,19 +947,19 @@ impl EffortModeTracker {
     }
 
     /// Build briefs only for unbound Pending fixed-team slots (replace waves
-    /// and partial re-spawns). Full-team planning still uses
-    /// [`build_specialist_briefs`].
+    /// and partial re-spawns). Full-team planning uses the same path so Expert
+    /// brain selection stays fixed on the ledger from [`Self::begin_team_run`].
     pub fn pending_slot_briefs(&self, task_text: &str) -> Vec<SpecialistBrief> {
         if self.pursuit != PursuitState::Pursuing {
             return Vec::new();
         }
         let n = self.target_n().unwrap_or(self.ledger.len());
-        let mode_name = self.mode.as_str();
-        let task = task_text.trim();
-        let task = if task.is_empty() {
-            "(no task text — analyze the current session context and codebase)"
-        } else {
-            task
+        let cfg = match crate::session::effort_brains::load_effort_brain_config() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "effort brains: load failed for pending briefs");
+                return Vec::new();
+            }
         };
         self.ledger
             .iter()
@@ -956,37 +968,23 @@ impl EffortModeTracker {
                     && r.task_id.is_none()
                     && matches!(r.status, SpecialistStatus::Pending)
             })
-            .map(|r| {
-                let is_contrarian = r.is_contrarian;
-                let role = r.role.clone();
-                let description = if is_contrarian {
-                    format!("{mode_name} contrarian specialist {slot}/{n}", slot = r.slot)
-                } else {
-                    format!("{mode_name} specialist {slot}/{n}", slot = r.slot)
-                };
-                let angle = specialist_angle(r.slot, n, is_contrarian);
-                let prompt = format!(
-                    "You are specialist slot {slot} of {n} on a **mandatory** {mode_name} effort-mode \
-                     analytic team (join-all). The shell launched you as a replacement / recovery \
-                     spawn; do not spawn further subagents.\n\
-                     \n\
-                     **Role:** {role}\n\
-                     **Analytic angle:** {angle}\n\
-                     \n\
-                     **User task:**\n{task}\n\
-                     \n\
-                     Produce a structured specialist report: findings, evidence (paths/symbols), \
-                     risks, and an independent verdict. Stay analytic and non-writing \
-                     (read/search only). End with a short summary the lead agent can synthesize.",
-                    slot = r.slot,
-                );
-                SpecialistBrief {
+            .filter_map(|r| {
+                let spec = cfg.get(&r.role).or_else(|| {
+                    tracing::warn!(role = %r.role, "effort brains: unknown ledger role");
+                    None
+                })?;
+                Some(SpecialistBrief {
                     slot: r.slot,
-                    role,
-                    is_contrarian,
-                    description,
-                    prompt,
-                }
+                    role: r.role.clone(),
+                    is_contrarian: r.is_contrarian || spec.contrarian_class,
+                    description: crate::session::effort_brains::brain_description(
+                        self.mode, r.slot, n, spec,
+                    ),
+                    prompt: crate::session::effort_brains::render_specialist_prompt(
+                        self.mode, r.slot, n, task_text, spec, true,
+                    ),
+                    brain_id: spec.id.as_str().to_string(),
+                })
             })
             .collect()
     }
@@ -1138,81 +1136,66 @@ pub struct SpecialistBrief {
     pub is_contrarian: bool,
     pub description: String,
     pub prompt: String,
+    /// Reasoning-brain id (same as `role` when brains are wired).
+    pub brain_id: String,
 }
 
 /// Build N specialist briefs for a mandatory team run under `mode`.
 ///
-/// Expert → 4; Heavy → 16 with the last slot marked contrarian.
-/// Returns empty when mode is Normal.
+/// Loads the effort-brain catalog, selects ids (Expert random 4 / Heavy all 16),
+/// and renders protocol prompts. Prefer [`EffortModeTracker::pending_slot_briefs`]
+/// in production after [`EffortModeTracker::begin_team_run`] so Expert selection
+/// is fixed on the ledger.
+///
+/// Returns empty when mode is Normal, or when brain config fails (logs error).
 pub fn build_specialist_briefs(mode: EffortMode, task_text: &str) -> Vec<SpecialistBrief> {
     let Some(n) = mode.team_size_default() else {
         return Vec::new();
     };
-    let task = task_text.trim();
-    let task = if task.is_empty() {
-        "(no task text — analyze the current session context and codebase)"
-    } else {
-        task
+    let cfg = match crate::session::effort_brains::load_effort_brain_config() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "effort brains: cannot build specialist briefs");
+            return Vec::new();
+        }
     };
-    let mode_name = mode.as_str();
-    (0..n)
-        .map(|i| {
-            let is_contrarian = mode.requires_contrarian() && i == n - 1;
-            let role = if is_contrarian {
-                format!("contrarian-{i}")
-            } else {
-                format!("specialist-{i}")
-            };
-            let description = if is_contrarian {
-                format!("{mode_name} contrarian specialist {i}/{n}")
-            } else {
-                format!("{mode_name} specialist {i}/{n}")
-            };
-            let angle = specialist_angle(i, n, is_contrarian);
-            let prompt = format!(
-                "You are specialist slot {i} of {n} on a **mandatory** {mode_name} effort-mode \
-                 analytic team (join-all). The shell launched you; do not spawn further subagents.\n\
-                 \n\
-                 **Role:** {role}\n\
-                 **Analytic angle:** {angle}\n\
-                 \n\
-                 **User task:**\n{task}\n\
-                 \n\
-                 Produce a structured specialist report: findings, evidence (paths/symbols), \
-                 risks, and an independent verdict. Stay analytic and non-writing \
-                 (read/search only). End with a short summary the lead agent can synthesize."
-            );
-            SpecialistBrief {
+    let brain_ids = match crate::session::effort_brains::select_brain_ids(&cfg, mode) {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::error!(error = %e, "effort brains: selection failed");
+            return Vec::new();
+        }
+    };
+    if brain_ids.len() != n {
+        tracing::error!(
+            selected = brain_ids.len(),
+            n,
+            "effort brains: selection size mismatch"
+        );
+        return Vec::new();
+    }
+    brain_ids
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, brain_id)| {
+            let spec = cfg.get(brain_id.as_str())?;
+            Some(SpecialistBrief {
                 slot: i,
-                role,
-                is_contrarian,
-                description,
-                prompt,
-            }
+                role: brain_id.as_str().to_string(),
+                is_contrarian: spec.contrarian_class,
+                description: crate::session::effort_brains::brain_description(mode, i, n, spec),
+                prompt: crate::session::effort_brains::render_specialist_prompt(
+                    mode, i, n, task_text, spec, false,
+                ),
+                brain_id: brain_id.as_str().to_string(),
+            })
         })
         .collect()
 }
 
-fn specialist_angle(slot: usize, n: usize, is_contrarian: bool) -> &'static str {
-    if is_contrarian {
-        return "Contrarian: challenge assumptions, find holes, argue the strongest case against the leading approach";
-    }
-    // Cycle distinct angles so N=4 and N=16 both get diversity without N templates.
-    match slot % 4 {
-        0 => "Correctness / verification: invariants, edge cases, tests, failure modes",
-        1 => "Architecture / design: structure, coupling, alternatives, migration risk",
-        2 => "Implementation / ops: build, integration, performance, operability",
-        _ => {
-            if n > 4 && slot >= n / 2 {
-                "Synthesis prep: cross-cut gaps, residual risks, readiness criteria"
-            } else {
-                "Product / UX / operator impact: clarity, observability, user-visible behavior"
-            }
-        }
-    }
-}
-
 /// Format joined specialist reports for injection into the leader turn.
+///
+/// Requires a **disagreement-oriented** synthesis (method deltas), not a bland average.
 pub fn format_team_report_package(
     mode: EffortMode,
     progress: &str,
@@ -1220,18 +1203,32 @@ pub fn format_team_report_package(
 ) -> String {
     let mode_name = mode.as_str();
     let mut out = format!(
-        "Effort mode: {mode_name} — **mandatory team complete** ({progress}). \
-         Synthesize these specialist reports into your answer. Do not re-run the fixed team.\n"
+        "Effort mode: {mode_name} — **mandatory team complete** ({progress}).\n\
+         Specialists used **distinct reasoning brains** (method protocols). \
+         Synthesize by comparing methods — do **not** paper over conflicts. \
+         Do not re-run the fixed team.\n\
+         \n\
+         After reading all reports, structure your answer with these sections:\n\
+         ## Consensus (multi-brain)\n\
+         ## Conflicts (brain A vs brain B — do not paper over)\n\
+         ## Unique contributions (single-brain claims)\n\
+         ## Residuals / unknowns\n\
+         ## Decision (cite brain ids)\n"
     );
     for (brief, body) in reports {
         let tag = if brief.is_contrarian {
-            "contrarian"
+            "contrarian-brain"
         } else {
-            "specialist"
+            "brain"
+        };
+        let bid = if brief.brain_id.is_empty() {
+            brief.role.as_str()
+        } else {
+            brief.brain_id.as_str()
         };
         out.push_str(&format!(
-            "\n--- {tag} slot {} ({}) ---\n{}\n",
-            brief.slot, brief.role, body
+            "\n--- {tag} slot {} ({bid}) ---\n{}\n",
+            brief.slot, body
         ));
     }
     out
@@ -1254,6 +1251,8 @@ pub enum EffortGateError {
     ReplaceSuccessForbidden(usize),
     NotHardStopped,
     NoContinueWave,
+    /// Effort-brain catalog/selection failed (fail loud; no angle fallback).
+    BrainConfig(String),
 }
 
 impl std::fmt::Display for EffortGateError {
@@ -1275,7 +1274,10 @@ impl std::fmt::Display for EffortGateError {
                 write!(f, "execute/write blocked until after team synthesis")
             }
             Self::PlanBlocksExecute => {
-                write!(f, "Plan mode + Effort: non-writing until plan allows execute")
+                write!(
+                    f,
+                    "Plan mode + Effort: non-writing until plan allows execute"
+                )
             }
             Self::UnknownSlot(s) => write!(f, "unknown specialist slot {s}"),
             Self::ReplaceCap { slot, cap } => {
@@ -1286,6 +1288,7 @@ impl std::fmt::Display for EffortGateError {
             }
             Self::NotHardStopped => write!(f, "not in hard-stop state"),
             Self::NoContinueWave => write!(f, "no pending continue wave"),
+            Self::BrainConfig(detail) => write!(f, "effort brain config error: {detail}"),
         }
     }
 }
@@ -1820,36 +1823,28 @@ mod tests {
 
     #[test]
     fn specialist_briefs_expert_n4_and_heavy_n16() {
+        unsafe { std::env::set_var(crate::session::effort_brains::EFFORT_BRAIN_SEED_ENV, "7") };
         let expert = build_specialist_briefs(EffortMode::Expert, "audit auth");
+        unsafe { std::env::remove_var(crate::session::effort_brains::EFFORT_BRAIN_SEED_ENV) };
         assert_eq!(expert.len(), 4);
-        assert!(expert.iter().all(|b| !b.is_contrarian));
         assert!(expert[0].prompt.contains("audit auth"));
-        assert!(expert[0].description.contains("expert specialist"));
+        assert!(expert[0].prompt.contains("Brain protocol"));
+        assert!(expert[0].prompt.contains("non-writing"));
+        // roles are brain ids, not specialist-i
+        assert!(!expert[0].role.starts_with("specialist-"));
+        let mut ids: Vec<_> = expert.iter().map(|b| b.brain_id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 4);
 
         let heavy = build_specialist_briefs(EffortMode::Heavy, "deep audit");
         assert_eq!(heavy.len(), 16);
+        assert_eq!(heavy[15].role, "red_team");
         assert!(heavy[15].is_contrarian);
-        assert_eq!(heavy[15].role, "contrarian-15");
-        assert!(heavy[15].prompt.contains("Contrarian"));
-        assert!(heavy.iter().take(15).all(|b| !b.is_contrarian));
+        assert!(heavy[15].prompt.contains("red_team"));
+        assert!(heavy.iter().filter(|b| b.is_contrarian).count() >= 1);
 
         assert!(build_specialist_briefs(EffortMode::Normal, "x").is_empty());
-    }
-
-    #[test]
-    fn needs_mandatory_fanout_while_pending_unbound() {
-        let mut t = EffortModeTracker::new(tmp());
-        t.set_mode(EffortMode::Expert, false);
-        assert!(!t.needs_mandatory_fanout());
-        t.begin_team_run().unwrap();
-        assert!(t.needs_mandatory_fanout());
-        // Bind one slot — still needs fanout for remaining.
-        assert_eq!(t.assign_next_pending_task("s0"), Some(0));
-        assert!(t.needs_mandatory_fanout());
-        for i in 1..4 {
-            assert_eq!(t.assign_next_pending_task(format!("s{i}")), Some(i));
-        }
-        assert!(!t.needs_mandatory_fanout());
     }
 
     #[test]
@@ -1863,7 +1858,38 @@ mod tests {
         let pkg = format_team_report_package(EffortMode::Expert, "4 of 4", &reports);
         assert!(pkg.contains("mandatory team complete"));
         assert!(pkg.contains("report-0"));
+        assert!(pkg.contains("Conflicts"));
+        assert!(pkg.contains("Decision (cite brain ids)"));
         assert!(pkg.contains("slot 3"));
+    }
+
+    #[test]
+    fn begin_team_run_uses_brain_ids_on_ledger() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Heavy, false);
+        t.begin_team_run().unwrap();
+        assert_eq!(t.ledger().len(), 16);
+        assert_eq!(t.ledger()[0].role, "first_principles");
+        assert_eq!(t.ledger()[15].role, "red_team");
+        assert!(t.ledger()[15].is_contrarian);
+        let pending = t.pending_slot_briefs("task");
+        assert_eq!(pending.len(), 16);
+        assert!(pending[0].prompt.contains("first_principles"));
+    }
+
+    #[test]
+    fn needs_mandatory_fanout_while_pending_unbound() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        assert!(!t.needs_mandatory_fanout());
+        t.begin_team_run().unwrap();
+        assert!(t.needs_mandatory_fanout());
+        assert_eq!(t.assign_next_pending_task("s0"), Some(0));
+        assert!(t.needs_mandatory_fanout());
+        for i in 1..4 {
+            assert_eq!(t.assign_next_pending_task(format!("s{i}")), Some(i));
+        }
+        assert!(!t.needs_mandatory_fanout());
     }
 
     #[test]

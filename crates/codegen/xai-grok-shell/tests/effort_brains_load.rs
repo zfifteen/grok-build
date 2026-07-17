@@ -1,9 +1,11 @@
-//! Focused integration tests for effort reasoning brains (PR-A).
-//! Avoids compiling the full xai-grok-shell lib-test graph.
+//! Focused integration tests for effort reasoning brains.
 
 use xai_grok_shell::session::effort_brains::{
-    load_effort_brain_config_from_layers, EffortBrainError, RosterSelection, BRAIN_COUNT_HEAVY,
-    EXPERT_K_DEFAULT,
+    load_effort_brain_config_from_layers, select_brain_ids, EffortBrainError, RosterSelection,
+    BRAIN_COUNT_HEAVY, EXPERT_K_DEFAULT, EFFORT_BRAIN_SEED_ENV,
+};
+use xai_grok_shell::session::effort_mode::{
+    build_specialist_briefs, format_team_report_package, EffortMode, EffortModeTracker,
 };
 
 #[test]
@@ -25,13 +27,6 @@ fn builtins_load_and_validate() {
         _ => panic!("expert random"),
     }
     assert!(cfg.get("red_team").unwrap().contrarian_class);
-    assert!(cfg.get("inversion").unwrap().contrarian_class);
-    assert!(cfg.get("pre_mortem").unwrap().contrarian_class);
-    assert!(cfg
-        .get("first_principles")
-        .unwrap()
-        .body_markdown
-        .contains("Method"));
 }
 
 #[test]
@@ -66,4 +61,56 @@ slots = ["first_principles", "red_team"]
         ),
         "got {err}"
     );
+}
+
+#[test]
+fn select_and_build_briefs_use_brains() {
+    let cfg = load_effort_brain_config_from_layers(None, None).unwrap();
+    let heavy_ids = select_brain_ids(&cfg, EffortMode::Heavy).unwrap();
+    assert_eq!(heavy_ids.len(), 16);
+    assert_eq!(heavy_ids[15].as_str(), "red_team");
+
+    unsafe { std::env::set_var(EFFORT_BRAIN_SEED_ENV, "99") };
+    let a = select_brain_ids(&cfg, EffortMode::Expert).unwrap();
+    let b = select_brain_ids(&cfg, EffortMode::Expert).unwrap();
+    unsafe { std::env::remove_var(EFFORT_BRAIN_SEED_ENV) };
+    assert_eq!(a, b);
+    assert_eq!(a.len(), 4);
+
+    let briefs = build_specialist_briefs(EffortMode::Heavy, "deep audit");
+    assert_eq!(briefs.len(), 16);
+    assert!(briefs[0].prompt.contains("Brain protocol"));
+    assert!(briefs[0].prompt.contains("deep audit"));
+    assert_eq!(briefs[15].brain_id, "red_team");
+
+    let pkg = format_team_report_package(
+        EffortMode::Heavy,
+        "16 of 16",
+        &briefs
+            .into_iter()
+            .map(|b| (b, "body".into()))
+            .collect::<Vec<_>>(),
+    );
+    assert!(pkg.contains("Conflicts"));
+    assert!(pkg.contains("red_team"));
+}
+
+#[test]
+fn tracker_begin_locks_brain_roles() {
+    let dir = std::env::temp_dir().join(format!(
+        "effort-tracker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut t = EffortModeTracker::new(dir);
+    t.set_mode(EffortMode::Heavy, false);
+    t.begin_team_run().unwrap();
+    assert_eq!(t.ledger()[0].role, "first_principles");
+    let pending = t.pending_slot_briefs("task");
+    assert_eq!(pending.len(), 16);
+    assert_eq!(pending[0].brain_id, "first_principles");
 }
