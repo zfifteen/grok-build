@@ -1,6 +1,6 @@
 <div align="center">
 
-# Power Grok (`powergrok`)
+# Power Grok
 
 **Expert · Heavy · Normal** — session effort modes for a coding agent that
 actually sticks with them.
@@ -14,6 +14,7 @@ actually sticks with them.
 [Install](#install-side-by-side) ·
 [Reference](#reference)
 
+**Command:** `powergrok` ·
 **Trunk:** [`powergrok`](https://github.com/zfifteen/powergrok/tree/powergrok) ·
 **Fork of:** [xai-org/grok-build](https://github.com/xai-org/grok-build)
 
