@@ -2893,25 +2893,7 @@ mod tests {
         );
     }
 
-    /// B10 CI branding test (integration).
-    /// Verifies that under the powergrok feature the binary advertises "Power Grok".
-    #[test]
-    #[cfg(feature = "powergrok")]
-    fn branding_help_contains_power_grok() {
-        // This test is only compiled under the product feature. The real
-        // integration test lives in tests/branding_integration.rs.
-        // The previous nested `cargo run` version has been removed per review.
-        let bin_path = env!("CARGO_BIN_EXE_xai-grok-pager");
-        let output = std::process::Command::new(bin_path)
-            .arg("--help")
-            .output()
-            .expect("failed to run powergrok binary");
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("Power Grok"),
-            "powergrok binary --help must contain \"Power Grok\" (got: {})",
-            stdout
-        );
-    }
+    // B10 help branding is covered by tests/branding_integration.rs
+    // (CARGO_BIN_EXE under --features powergrok). Do not reintroduce a nested
+    // `cargo run` unit test here.
 }

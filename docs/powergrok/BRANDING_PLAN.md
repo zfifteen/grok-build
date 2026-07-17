@@ -97,7 +97,7 @@ This is **not** a full fork rename (we remain a source-built variant of upstream
 - **Preserve** → technical/official/upstream (add to allowlist with justification)
 - **Conditional** → extracted to a branding adapter guarded by the `powergrok` feature flag or `POWERGROK_BRANDING=1` env var (never inline `is_powergrok()` or primary `argv0` checks in core paths — see Hard rule and B8).
 
-This audit **must produce** an automated CI test (B10) that runs on every build/PR (asserts "Power Grok" in `--help`, TUI header, effort chrome, etc.). One-time manual audit is insufficient.
+This audit **must produce** an automated CI test (B10) that runs on every product build/PR and asserts **"Power Grok" in `--help`** under `--features powergrok`. TUI chrome must use the same `product_name()` adapter. Effort-chrome branding asserts are **deferred** (not required for branding v1 merge). One-time manual audit alone is insufficient.
 
 ---
 
@@ -105,13 +105,12 @@ This audit **must produce** an automated CI test (B10) that runs on every build/
 
 ### 5.1 Centralization & Detection (Revised per Review)
 
-**Preferred mechanism (B8):** The install wrapper sets `POWERGROK_BRANDING=1`. Combine with a compile-time Cargo feature flag (`powergrok`) that enables branding code paths. This eliminates fragile runtime `argv0` checks in core TUI/CLI logic (addressing review points 1 & 2).
+**Preferred mechanism (B8 / Model A):** Product builds enable the `powergrok` Cargo feature, which **always** brands as Power Grok via `xai_grok_config::product_name()` / `is_powergrok_branding()`. The adapter module is always compiled so call sites need no feature-gated imports. `POWERGROK_BRANDING=1` is a non-feature override for tests/experiments only (not the primary product signal). `argv0` is not primary.
 
-- Add `product_brand()` / `is_powergrok_branding()` helpers in `xai-grok-config` (or a thin adapter crate) that respect the env var + feature flag.
-- **No inline `if is_powergrok()`** in upstream TUI rendering, clap builders, or shared string formatters. Use adapters or conditional compilation.
-- TUI chrome: extend via dedicated `apply_branding_chrome()` (mirroring effort mode updates).
-- Prompt injection / system reminders: use the helper to inject "You are Power Grok...".
-- Documentation (B9): Use build-time templating or a minimal structured patch file applied when rendering user-guide content under Powergrok (avoid runtime regex).
+- Call `product_name()` / `is_powergrok_branding()` from UI/help paths; do not scatter `if cfg!(feature = "powergrok") { ... } else { "Grok Build" }` at every site.
+- **No inline `if is_powergrok()`** runtime forks in upstream TUI rendering or clap builders beyond the adapter itself.
+- TUI chrome: use `product_name()` (same string as help/about).
+- Documentation (B9): build-time copy + targeted replacements into `OUT_DIR`, with a golden assert on at least one page; `include_str!` of branded guide when the feature is on.
 
 This design ensures low merge-conflict cost on upstream syncs.
 
