@@ -9,14 +9,14 @@ actually sticks with them.
 
 [What it adds](#what-power-grok-adds) ·
 [How modes work](#how-expert-heavy-and-normal-work) ·
-[Brains](#reasoning-brains-your-subagent-profiles) ·
+[Brains](#reasoning-brains) ·
 [Try it](#try-it-in-a-session) ·
 [Install](#install-side-by-side) ·
 [Reference](#reference)
 
 **Command:** `powergrok` ·
 **Trunk:** [`powergrok`](https://github.com/zfifteen/powergrok/tree/powergrok) ·
-**Fork of:** [xai-org/grok-build](https://github.com/xai-org/grok-build)
+**Upstream:** [xai-org/grok-build](https://github.com/xai-org/grok-build)
 
 </div>
 
@@ -26,19 +26,20 @@ actually sticks with them.
 
 If you use [Grok on the web](https://grok.com), you already know the idea:
 sometimes you want a quick answer; sometimes you want the model to **work harder**
-before it speaks. Deeper modes feel like a team thinking, not a single reply.
+before it speaks. Deeper modes feel like a team thinking through the problem.
 
-**Power Grok** brings that **same depth idea** (light / deeper / max team) into the
-terminal — as **local shell modes**, not a clone of the web UI or a dependency
-on the platform multi-agent research API.
+**Power Grok** brings that **depth idea** (light / deeper / max team) into the
+terminal as **local shell modes**: sticky Expert, Heavy, and Normal, with a fixed
+team of **brains** on non-trivial work.
 
-It’s a **source-built fork** of [Grok Build](https://github.com/xai-org/grok-build):
-same agent family (TUI, tools, edits, shell, MCP, plan mode, headless, ACP), plus
-**first-class effort modes** and **customizable specialist profiles** (“brains”).
-It installs **next to** the official `grok` CLI; it doesn’t replace it.
+It’s a **source-built product line** on top of the
+[Grok Build](https://github.com/xai-org/grok-build) agent family (TUI, tools,
+edits, shell, MCP, plan mode, headless, ACP), plus first-class effort modes and
+an editable roster of reasoning profiles. Install as **`powergrok`** alongside
+the official `grok` CLI, with its own home and project tree.
 
-On the **`powergrok` trunk**, Expert / Heavy / Normal and the 16-brain roster are
-product features, not skill markdown you hope the model remembers.
+On the **`powergrok` trunk**, Expert / Heavy / Normal and the 16-brain roster
+are product features enforced by the shell.
 
 In short: **web-style effort depth, local by design.**
 
@@ -48,57 +49,55 @@ Need the binary first? Jump to [Install](#install-side-by-side).
 
 ## How Expert, Heavy, and Normal work
 
-Type a slash command. The mode **sticks** for the session. The chrome tells you
-where you are. For **non-trivial** work under Expert or Heavy, the shell
-**enforces** a fixed team size instead of hoping the model “remembers the policy.”
-Trivial turns (quick lookups, small fixes) stay single-leader even in elevated modes.
+Type a slash command. The mode **sticks** for the session. The chrome shows
+progress and which brain is active. For **non-trivial** work under Expert or
+Heavy, the shell runs a **fixed-size team**. Trivial turns (quick lookups, small
+fixes) stay with a single leader even in elevated modes.
 
 | You type | Feel | What happens |
 |----------|------|----------------|
 | **`/normal`** | Everyday agent | One leader. Fast. Default coding and chat. |
-| **`/expert`** | “Think harder with me” | **4** analytic specialists, then a synthesis. Usual sweet spot. |
-| **`/heavy`** | “Leave no angle unturned” | **16** analytic specialists (≥1 contrarian), then synthesis. Thorough — and **costly / slower**. |
+| **`/expert`** | “Think harder with me” | **4 brains** analyze, then the leader synthesizes. Usual sweet spot. |
+| **`/heavy`** | “Leave no angle unturned” | **16 brains** (≥1 contrarian-class), then synthesis. Thorough — and **costly / slower**. |
 
-### What “analytic specialists” means
+### What the team does during analysis
 
-Under Expert and Heavy, the fixed team is there to **read, search, argue, and
-write structured reports** — not to rewrite your repo mid-deliberation.
-Writes wait until **after** the leader has synthesized the team’s work.
+Under Expert and Heavy, each brain **reads, searches, argues, and returns a
+structured report**. Repo writes wait until **after** the leader has synthesized
+the team’s work.
 
 Depth first; execution second.
 
 ### A typical Expert/Heavy turn
 
 1. You’re already in `/expert` or `/heavy` (sticky — set it once).
-2. You ask for something that actually needs depth (design, audit, hard bug).
-3. Power Grok spawns the fixed team **locally** on your machine.
-4. Everyone finishes (or you abort / take a partial report under the rules).
-5. The leader gets a **disagreement-oriented** package: where the brains agreed,
-   where they conflicted, what only one of them saw, what’s still open.
-6. **Then** you can execute — implement, patch, commit — with eyes open.
+2. You ask for something that needs depth (design, audit, hard bug).
+3. Power Grok runs the fixed brain team **locally** on your machine.
+4. The team finishes (or you abort / take a partial report under the rules).
+5. The leader gets a **disagreement-oriented** package: consensus, conflicts,
+   unique contributions, residuals, and a decision path.
+6. **Then** you can execute — implement, patch, commit — with that synthesis in hand.
 
-No “skill theater.” The gates live in the shell.
+Team size and join rules live in the shell ledger.
 
 More detail: [`docs/effort-modes-builtin/`](docs/effort-modes-builtin/).
 
 ---
 
-## Reasoning brains: your subagent profiles
+## Reasoning brains
 
-The specialists aren’t blank slots labeled `specialist-3`.
-
-They run **brains** — short, versioned **reasoning protocols**: how to think,
-what moves are forbidden, what artifact to produce, and what *kind* of delta
-they’re responsible for. Not cosplay personas. Not job-title roleplay.
+A **brain** is a short, versioned **reasoning protocol**: method, stop rules, the
+artifact it must produce, and the kind of delta it contributes on the team.
+Expert and Heavy fill their slots from a shared pool of these profiles.
 
 ### The simple rules
 
 - There is a pool of **16** built-in brains.
-- **Expert** picks a **random 4** of those 16 for each team run (variety without
-  always spinning the full roster; optional seed: `GROK_EFFORT_BRAIN_SEED`).
-- **Heavy** runs **all 16**, in a fixed order, with at least one deliberately
-  contrarian profile in the mix.
-- You can **edit** the pool. That’s the point.
+- **Expert** draws a **random 4** of those 16 for each team run (optional seed:
+  `GROK_EFFORT_BRAIN_SEED`).
+- **Heavy** runs **all 16**, in a fixed order, including at least one
+  contrarian-class brain.
+- The pool is **user-editable** — protocols, rosters, and optional model pins.
 
 ### Built-ins (ids you’ll see in chrome and reports)
 
@@ -122,12 +121,11 @@ On first use, Power Grok seeds editable copies under your home:
   brains/*.md              # the actual protocols
 ```
 
-Want a project-specific set? Drop an overlay at
-`<repo>/.powergrok/effort-brains/`. Merge is by id; broken config fails **loud**
-instead of quietly turning into generic specialists.
+Project overlay: `<repo>/.powergrok/effort-brains/` (merge-by-id). Invalid config
+fails with a clear error so the roster stays intentional.
 
-Optional: per-brain model overrides when you set `allow_model_overrides = true`
-in `catalog.toml`.
+Optional: per-brain model overrides when `allow_model_overrides = true` in
+`catalog.toml`.
 
 Full plan: [`docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md`](docs/effort-modes-builtin/07-reasoning-brains-implementation-plan.md).
 
@@ -144,11 +142,11 @@ powergrok
 # … ask for a real design review or audit …
 
 /heavy           # full 16 — expect more time and cost
-/normal          # back to single-leader day-to-day
+/normal          # single-leader day-to-day
 ```
 
-You’ll see mode progress in chrome (e.g. `Expert 2 of 4 · bayesian_update`).
-That’s the team working — not a wallpaper label.
+Chrome tracks progress with the active brain id (e.g.
+`Expert 2 of 4 · bayesian_update`).
 
 ---
 
@@ -160,10 +158,10 @@ That’s the team working — not a wallpaper label.
 | User state | `~/.grok` | **`~/.powergrok`** (`GROK_HOME`) |
 | Project tree | `<repo>/.grok/` | **`<repo>/.powergrok/`** (when run as `powergrok`) |
 | Concurrent use | — | **Supported** |
-| Auto-update | product default | **off** in Power Grok seed (source-built stays put) |
+| Auto-update | product default | **off** in Power Grok seed (source-built install stays put) |
 
-Full isolation contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md).  
-Branding (“Power Grok” in prose, `powergrok` for binary/paths):
+Isolation contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md).  
+Naming: “Power Grok” in prose, `powergrok` for binary and paths —
 [`docs/powergrok/BRANDING_PLAN.md`](docs/powergrok/BRANDING_PLAN.md).
 
 ---
@@ -211,7 +209,7 @@ powergrok --help
 ```
 
 First launch opens the product browser/account flow under **Power Grok’s home**
-(not official `~/.grok`). See
+(`~/.powergrok`). See
 [`crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md`](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
 
 Longer install / isolation notes: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md).
@@ -268,7 +266,7 @@ Always pass **`--features powergrok`** for Power Grok branding and the product b
 |--------|------|
 | `session::effort_mode` | Sticky modes, ledgers, gates, chrome, team briefs |
 | `session::effort_brains` | Catalog load/validate, select, prompt, seed export |
-| `session::effort_team` | Shell-owned specialist spawn / join |
+| `session::effort_team` | Shell-owned brain spawn / join |
 
 ### Development
 
@@ -284,9 +282,9 @@ cargo fmt --all
 
 | Branch | Role |
 |--------|------|
-| **`main`** | Upstream intake only (`xai-org/grok-build`) |
+| **`main`** | Upstream intake (`xai-org/grok-build`) |
 | **`powergrok`** | **Product trunk** — GitHub default; builds ship from here |
-| **`feat/*`** | Feature work; open PRs **into `powergrok`**, not product work into `main` |
+| **`feat/*`** | Feature work; open PRs **into `powergrok`** |
 
 Details: [`AGENTS.md`](AGENTS.md).
 
@@ -295,7 +293,7 @@ Details: [`AGENTS.md`](AGENTS.md).
 | Knob | Purpose |
 |------|---------|
 | `GROK_HOME` | Defaults to `~/.powergrok` via wrapper |
-| `POWERGROK_BRANDING=1` | Non-feature branding override (wrapper sets this) |
+| `POWERGROK_BRANDING=1` | Branding override (wrapper sets this) |
 | `GROK_EFFORT_BRAIN_SEED` | Deterministic Expert brain draw (tests / repro) |
 
 ### Contributing
