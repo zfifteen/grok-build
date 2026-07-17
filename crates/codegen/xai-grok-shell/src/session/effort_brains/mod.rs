@@ -23,6 +23,7 @@ pub mod defaults;
 pub mod error;
 pub mod load;
 pub mod prompt;
+pub mod seed;
 pub mod select;
 pub mod types;
 pub mod validate;
@@ -30,6 +31,7 @@ pub mod validate;
 pub use error::EffortBrainError;
 pub use load::{load_effort_brain_config, load_effort_brain_config_from_layers};
 pub use prompt::{brain_description, render_specialist_prompt};
+pub use seed::{ensure_user_effort_brains_seeded, export_builtin_effort_brains_to};
 pub use select::{select_brain_ids, EFFORT_BRAIN_SEED_ENV};
 pub use types::{
     BrainId, BrainSpec, EffortBrainConfig, RosterMode, RosterSelection, BRAIN_COUNT_HEAVY,

@@ -984,6 +984,11 @@ impl EffortModeTracker {
                         self.mode, r.slot, n, task_text, spec, true,
                     ),
                     brain_id: spec.id.as_str().to_string(),
+                    model_override: if cfg.allow_model_overrides {
+                        spec.model.clone()
+                    } else {
+                        None
+                    },
                 })
             })
             .collect()
@@ -1031,38 +1036,62 @@ impl EffortModeTracker {
             successful: self.successful_count(),
             target_n: self.target_n(),
             solo_waiver: self.solo_waiver,
+            brain_hint: self.chrome_brain_hint(),
         }
+    }
+
+    /// Brain id for chrome: prefer in-flight Running, else next Pending, else last Success.
+    fn chrome_brain_hint(&self) -> Option<String> {
+        if !self.mode.is_elevated() || self.solo_waiver {
+            return None;
+        }
+        if let Some(r) = self.ledger.iter().find(|r| {
+            !r.outside_n && matches!(r.status, SpecialistStatus::Running)
+        }) {
+            return Some(r.role.clone());
+        }
+        if let Some(r) = self.ledger.iter().find(|r| {
+            !r.outside_n
+                && matches!(r.status, SpecialistStatus::Pending)
+                && r.task_id.is_none()
+        }) {
+            return Some(r.role.clone());
+        }
+        self.ledger
+            .iter()
+            .rev()
+            .find(|r| !r.outside_n && matches!(r.status, SpecialistStatus::Success))
+            .map(|r| r.role.clone())
     }
 }
 
 // ── TUI chrome labels (pure) ───────────────────────────────────────────────
 
 /// Effort fields the TUI needs for the status-bar chip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffortChromeState {
     pub mode: EffortMode,
     pub pursuit: PursuitState,
     pub successful: usize,
     pub target_n: Option<usize>,
     pub solo_waiver: bool,
+    /// Active / next / last brain id for elevated team runs.
+    pub brain_hint: Option<String>,
 }
 
 impl EffortChromeState {
     /// Status-bar label from shell effort state, or `None` when Normal
     /// (elevated chrome must disappear).
     ///
-    /// Examples: `Expert`, `Expert 2 of 4`, `Heavy Partial 3 of 16`,
+    /// Examples: `Expert`, `Expert 2 of 4 · bayesian_update`, `Heavy Partial 3 of 16`,
     /// `Expert Waived`.
     pub fn status_label(self) -> Option<String> {
-        format_effort_chrome_label(self)
+        format_effort_chrome_label(&self)
     }
 }
 
 /// Format the durable TUI effort chrome label from shipped tracker fields.
-///
-/// Drive this helper from unit tests and from the wire payload builder so
-/// progress math is not reimplemented in the pager.
-pub fn format_effort_chrome_label(state: EffortChromeState) -> Option<String> {
+pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
     if !state.mode.is_elevated() {
         return None;
     }
@@ -1076,22 +1105,28 @@ pub fn format_effort_chrome_label(state: EffortChromeState) -> Option<String> {
     }
     let n = state.target_n.unwrap_or(0);
     let s = state.successful;
-    match state.pursuit {
+    let base = match state.pursuit {
         PursuitState::PartialReport => {
             if n > 0 {
-                Some(format!("{name} Partial {s} of {n}"))
+                format!("{name} Partial {s} of {n}")
             } else {
-                Some(format!("{name} Partial"))
+                format!("{name} Partial")
             }
         }
         PursuitState::Pursuing | PursuitState::Aborting => {
             if n > 0 {
-                Some(format!("{name} {s} of {n}"))
+                format!("{name} {s} of {n}")
             } else {
-                Some(name.to_string())
+                name.to_string()
             }
         }
-        PursuitState::Idle | PursuitState::Waived => Some(name.to_string()),
+        PursuitState::Idle | PursuitState::Waived => name.to_string(),
+    };
+    match &state.brain_hint {
+        Some(b) if !b.is_empty() && matches!(state.pursuit, PursuitState::Pursuing | PursuitState::Aborting | PursuitState::PartialReport) => {
+            Some(format!("{base} · {b}"))
+        }
+        _ => Some(base),
     }
 }
 
@@ -1104,10 +1139,11 @@ pub struct EffortChromeWire {
     pub successful: usize,
     pub target_n: Option<usize>,
     pub solo_waiver: bool,
+    pub brain_hint: Option<String>,
 }
 
 impl EffortChromeState {
-    pub fn to_wire(self) -> EffortChromeWire {
+    pub fn to_wire(&self) -> EffortChromeWire {
         EffortChromeWire {
             mode: self.mode.as_str().to_string(),
             pursuit: match self.pursuit {
@@ -1122,6 +1158,7 @@ impl EffortChromeState {
             successful: self.successful,
             target_n: self.target_n,
             solo_waiver: self.solo_waiver,
+            brain_hint: self.brain_hint.clone(),
         }
     }
 }
@@ -1138,6 +1175,8 @@ pub struct SpecialistBrief {
     pub prompt: String,
     /// Reasoning-brain id (same as `role` when brains are wired).
     pub brain_id: String,
+    /// Optional model override from brain catalog (only if allow_model_overrides).
+    pub model_override: Option<String>,
 }
 
 /// Build N specialist briefs for a mandatory team run under `mode`.
@@ -1188,6 +1227,11 @@ pub fn build_specialist_briefs(mode: EffortMode, task_text: &str) -> Vec<Special
                     mode, i, n, task_text, spec, false,
                 ),
                 brain_id: brain_id.as_str().to_string(),
+                model_override: if cfg.allow_model_overrides {
+                    spec.model.clone()
+                } else {
+                    None
+                },
             })
         })
         .collect()
@@ -1906,19 +1950,20 @@ mod tests {
     fn chrome_label_expert_heavy_progress_partial_waived_normal_clears() {
         // Normal → no elevated chrome.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Normal,
                 pursuit: PursuitState::Idle,
                 successful: 0,
                 target_n: None,
                 solo_waiver: false,
+                brain_hint: None,
             }),
             None
         );
 
         // Sticky Expert idle → mode name only.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Idle,
                 successful: 0,
@@ -1930,17 +1975,18 @@ mod tests {
 
         // Pursuing with S of N.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Pursuing,
                 successful: 2,
                 target_n: Some(4),
                 solo_waiver: false,
+                brain_hint: None,
             }),
             Some("Expert 2 of 4".into())
         );
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Heavy,
                 pursuit: PursuitState::Pursuing,
                 successful: 12,
@@ -1952,17 +1998,18 @@ mod tests {
 
         // Partial / Waived.
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Heavy,
                 pursuit: PursuitState::PartialReport,
                 successful: 3,
                 target_n: Some(16),
                 solo_waiver: false,
+                brain_hint: None,
             }),
             Some("Heavy Partial 3 of 16".into())
         );
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Waived,
                 successful: 0,
@@ -1972,12 +2019,13 @@ mod tests {
             Some("Expert Waived".into())
         );
         assert_eq!(
-            format_effort_chrome_label(EffortChromeState {
+            format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Expert,
                 pursuit: PursuitState::Idle,
                 successful: 0,
                 target_n: Some(4),
                 solo_waiver: true,
+                brain_hint: None,
             }),
             Some("Expert Waived".into())
         );

@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 /// exists; does not yet auto-discover project root (pass via
 /// [`load_effort_brain_config_from_layers`] from session code later).
 pub fn load_effort_brain_config() -> Result<EffortBrainConfig, EffortBrainError> {
+    // First-run: seed editable copies under $GROK_HOME/effort-brains when missing.
+    let _ = super::seed::ensure_user_effort_brains_seeded();
     let user = xai_grok_config::user_grok_home().map(|h| h.join("effort-brains"));
     let user_ref = user.as_deref().filter(|p| p.is_dir());
     load_effort_brain_config_from_layers(user_ref, None)

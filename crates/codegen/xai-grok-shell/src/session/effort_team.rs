@@ -49,6 +49,9 @@ pub async fn spawn_specialist(
         runtime_overrides: SubagentRuntimeOverrides {
             // Analytic-only fixed team: read/search, no writes.
             capability_mode: Some(SubagentCapabilityMode::ReadOnly),
+            model: brief.model_override.clone(),
+            model_override_provenance:
+                xai_grok_tools::implementations::grok_build::task::types::ModelOverrideProvenance::Harness,
             ..Default::default()
         },
         // Await via oneshot; still surfaces in TUI via spawn notifications.

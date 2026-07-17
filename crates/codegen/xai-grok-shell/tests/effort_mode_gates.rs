@@ -492,18 +492,19 @@ fn heavy_mandatory_team_requires_contrarian_success() {
 fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
     // (a) Expert / Heavy sticky chrome names the mode.
     assert_eq!(
-        format_effort_chrome_label(EffortChromeState {
+        format_effort_chrome_label(&EffortChromeState {
             mode: EffortMode::Expert,
             pursuit: PursuitState::Idle,
             successful: 0,
             target_n: Some(4),
             solo_waiver: false,
+            brain_hint: None,
         })
         .as_deref(),
         Some("Expert")
     );
     assert_eq!(
-        format_effort_chrome_label(EffortChromeState {
+        format_effort_chrome_label(&EffortChromeState {
             mode: EffortMode::Heavy,
             pursuit: PursuitState::Idle,
             successful: 0,
@@ -516,19 +517,20 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
 
     // (b) Normal clears elevated chrome.
     assert_eq!(
-        format_effort_chrome_label(EffortChromeState {
+        format_effort_chrome_label(&EffortChromeState {
             mode: EffortMode::Normal,
             pursuit: PursuitState::Idle,
             successful: 0,
             target_n: None,
             solo_waiver: false,
+            brain_hint: None,
         }),
         None
     );
 
     // (c) Pursuing ledger with known S and N.
     assert_eq!(
-        format_effort_chrome_label(EffortChromeState {
+        format_effort_chrome_label(&EffortChromeState {
             mode: EffortMode::Expert,
             pursuit: PursuitState::Pursuing,
             successful: 2,
@@ -553,18 +555,19 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
 
     // (d) Partial / Waived labels.
     assert_eq!(
-        format_effort_chrome_label(EffortChromeState {
+        format_effort_chrome_label(&EffortChromeState {
             mode: EffortMode::Expert,
             pursuit: PursuitState::PartialReport,
             successful: 1,
             target_n: Some(4),
             solo_waiver: false,
+            brain_hint: None,
         })
         .as_deref(),
         Some("Expert Partial 1 of 4")
     );
     assert_eq!(
-        format_effort_chrome_label(EffortChromeState {
+        format_effort_chrome_label(&EffortChromeState {
             mode: EffortMode::Heavy,
             pursuit: PursuitState::Waived,
             successful: 0,

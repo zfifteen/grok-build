@@ -114,3 +114,52 @@ fn tracker_begin_locks_brain_roles() {
     assert_eq!(pending.len(), 16);
     assert_eq!(pending[0].brain_id, "first_principles");
 }
+
+
+#[test]
+fn chrome_includes_brain_hint() {
+    use xai_grok_shell::session::effort_mode::format_effort_chrome_label;
+    use xai_grok_shell::session::effort_mode::{EffortChromeState, PursuitState};
+    let dir = std::env::temp_dir().join(format!(
+        "effort-chrome-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut tr = EffortModeTracker::new(dir);
+    tr.set_mode(EffortMode::Heavy, false);
+    tr.begin_team_run().unwrap();
+    let label = tr.chrome_state().status_label().unwrap();
+    assert!(label.contains("Heavy 0 of 16"), "{label}");
+    assert!(label.contains("first_principles"), "{label}");
+
+    let bare = format_effort_chrome_label(&EffortChromeState {
+        mode: EffortMode::Expert,
+        pursuit: PursuitState::Pursuing,
+        successful: 1,
+        target_n: Some(4),
+        solo_waiver: false,
+        brain_hint: Some("bayesian_update".into()),
+    })
+    .unwrap();
+    assert_eq!(bare, "Expert 1 of 4 · bayesian_update");
+}
+
+#[test]
+fn seed_export_roundtrip() {
+    use xai_grok_shell::session::effort_brains::export_builtin_effort_brains_to;
+    let dir = std::env::temp_dir().join(format!(
+        "effort-seed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    export_builtin_effort_brains_to(&dir).unwrap();
+    assert!(dir.join("README.md").is_file());
+    assert_eq!(std::fs::read_dir(dir.join("brains")).unwrap().count(), 16);
+}
