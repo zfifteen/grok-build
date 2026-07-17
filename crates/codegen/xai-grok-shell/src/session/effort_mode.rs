@@ -208,12 +208,21 @@ impl EffortModeTracker {
         let mut t = Self::new(session_dir);
         t.mode = snapshot.mode;
         // Transient pursuit does not survive restart — sticky mode does.
+        // Mid-flight Pursuing/Aborting become Idle and re-gate writes.
+        // Terminal pursuits keep their unlock: PartialReport / Waived always
+        // unlock (abort path), and Idle restores the snapshot flag so a
+        // completed full-team synthesis still allows execute after resume.
         t.pursuit = match snapshot.pursuit {
             PursuitState::Pursuing | PursuitState::Aborting => PursuitState::Idle,
             other => other,
         };
         t.solo_waiver = snapshot.solo_waiver;
-        t.synthesis_complete = false;
+        t.synthesis_complete = match snapshot.pursuit {
+            PursuitState::PartialReport | PursuitState::Waived => true,
+            PursuitState::Pursuing | PursuitState::Aborting => false,
+            PursuitState::Idle => snapshot.synthesis_complete,
+        };
+        // Replace budgets are per team-run; resume starts a clean wave budget.
         t.replace_waves_used = 0;
         t.ledger = snapshot.ledger;
         t
@@ -470,6 +479,100 @@ impl EffortModeTracker {
         Ok(())
     }
 
+    /// Slot indices that are not yet counting toward N and may be replaced
+    /// (terminal non-success, under per-slot replace cap).
+    pub fn replaceable_slots(&self) -> Vec<usize> {
+        self.ledger
+            .iter()
+            .filter(|r| {
+                !r.outside_n
+                    && !r.counts_toward_n
+                    && !matches!(
+                        r.status,
+                        SpecialistStatus::Success
+                            | SpecialistStatus::Pending
+                            | SpecialistStatus::Running
+                    )
+                    && r.replaces < self.caps.max_replace_per_slot
+            })
+            .map(|r| r.slot)
+            .collect()
+    }
+
+    /// Prepare one automatic replace wave: reset replaceable failed slots to
+    /// Pending and increment the wave counter.
+    ///
+    /// Returns `true` when at least one slot is ready for re-spawn (so
+    /// [`needs_mandatory_fanout`] becomes true). Returns `false` when already
+    /// at hard-stop, still in-flight, already complete, or no slot can be
+    /// replaced under caps.
+    ///
+    /// When [`continue_wave_pending`] is set (user chose hard-stop `continue`),
+    /// consumes that grant and runs one extra wave even if the normal wave
+    /// budget is exhausted. Continue also re-allows one replace on slots that
+    /// already hit the per-slot cap so the extra wave is actually actionable.
+    pub fn try_prepare_replace_wave(&mut self) -> bool {
+        if self.pursuit != PursuitState::Pursuing || self.synthesis_complete {
+            return false;
+        }
+        if !self.all_fixed_slots_terminal() {
+            return false;
+        }
+        if self.can_claim_full_team().is_ok() {
+            return false;
+        }
+
+        // Hard-stop continue buys one wave past the normal cap.
+        if self.continue_wave_pending {
+            if self.begin_continue_wave().is_err() {
+                return false;
+            }
+            // Make the bought wave actionable: free one replace on terminal
+            // non-success slots that already sat at the per-slot cap.
+            for row in &mut self.ledger {
+                if row.outside_n || row.counts_toward_n {
+                    continue;
+                }
+                if matches!(
+                    row.status,
+                    SpecialistStatus::Success
+                        | SpecialistStatus::Pending
+                        | SpecialistStatus::Running
+                ) {
+                    continue;
+                }
+                if row.replaces >= self.caps.max_replace_per_slot {
+                    row.replaces = self.caps.max_replace_per_slot.saturating_sub(1);
+                }
+            }
+        } else if self.replace_waves_used >= self.caps.max_replace_waves {
+            return false;
+        }
+
+        let slots = self.replaceable_slots();
+        if slots.is_empty() {
+            // Nothing left to replace under per-slot caps — force hard-stop
+            // by exhausting the wave budget so UX and is_hard_stop agree.
+            if self.replace_waves_used < self.caps.max_replace_waves {
+                self.replace_waves_used = self.caps.max_replace_waves;
+            }
+            return false;
+        }
+
+        let mut any = false;
+        for slot in slots {
+            if self.replace_slot(slot).is_ok() {
+                any = true;
+            }
+        }
+        if any {
+            // Continue waves already sit at/above the hard-stop cap; still
+            // count the wave so bookkeeping stays monotonic.
+            self.mark_replace_wave();
+        }
+        any
+    }
+
     /// User abort: freeze ledger, no more automatic replaces.
     pub fn abort_team(&mut self) {
         if self.pursuit != PursuitState::Pursuing && self.pursuit != PursuitState::Aborting {
@@ -553,6 +656,14 @@ impl EffortModeTracker {
     ///
     /// Trivial tasks and solo waiver leave the ledger empty / Waived
     /// (writes stay allowed under elevated sticky mode).
+    ///
+    /// Dead-ledger recovery: when a prior join left all slots terminal but
+    /// short of N (and no continue-wave is pending), a new non-trivial turn
+    /// opens a fresh team so the session cannot stick write-blocked forever.
+    ///
+    /// Hard-stop `continue`: if the user message is a continue grant while
+    /// hard-stopped, sets [`continue_wave_pending`] so the mandatory fan-out
+    /// path can run one extra replace wave (tech-spec §4.4).
     /// Returns whether a new team run was begun.
     pub fn on_session_turn_start(&mut self, task_text: &str) -> Result<bool, EffortGateError> {
         if !self.mode.is_elevated() {
@@ -562,13 +673,35 @@ impl EffortModeTracker {
             self.pursuit = PursuitState::Waived;
             return Ok(false);
         }
+        // Hard-stop continue grant (before trivial short-circuit so "continue"
+        // is never treated as a trivial waived turn).
+        if is_hard_stop_continue_request(task_text) && self.is_hard_stop() {
+            let _ = self.hard_stop_continue();
+            return Ok(false);
+        }
         if is_trivial_task(task_text) {
             // Trivial short-circuit: Waived so write tools stay available.
             self.pursuit = PursuitState::Waived;
             return Ok(false);
         }
-        // Already pursuing — keep the open run.
+        // Already pursuing with an open (non-terminal) run — keep it.
         if self.pursuit == PursuitState::Pursuing && !self.ledger.is_empty() {
+            // Continue grant: leave ledger so fan-out can re-spawn replaced slots.
+            if self.continue_wave_pending {
+                return Ok(false);
+            }
+            // In-flight specialists still running/pending — do not reset.
+            if !self.all_fixed_slots_terminal() {
+                return Ok(false);
+            }
+            // Dead short team (all terminal, S < N, no pending continue):
+            // reopen a fresh team so the next fan-out can unlock writes.
+            // Hard-stop UX already offered continue/--solo; a new user turn
+            // is treated as a new attempt under sticky elevated mode.
+            if !self.synthesis_complete {
+                self.begin_team_run()?;
+                return Ok(true);
+            }
             return Ok(false);
         }
         // Fresh non-trivial work under elevated mode → open N slots.
@@ -799,6 +932,97 @@ impl EffortModeTracker {
                 && r.task_id.is_none()
                 && matches!(r.status, SpecialistStatus::Pending)
         })
+    }
+
+    /// Build briefs only for unbound Pending fixed-team slots (replace waves
+    /// and partial re-spawns). Full-team planning still uses
+    /// [`build_specialist_briefs`].
+    pub fn pending_slot_briefs(&self, task_text: &str) -> Vec<SpecialistBrief> {
+        if self.pursuit != PursuitState::Pursuing {
+            return Vec::new();
+        }
+        let n = self.target_n().unwrap_or(self.ledger.len());
+        let mode_name = self.mode.as_str();
+        let task = task_text.trim();
+        let task = if task.is_empty() {
+            "(no task text — analyze the current session context and codebase)"
+        } else {
+            task
+        };
+        self.ledger
+            .iter()
+            .filter(|r| {
+                !r.outside_n
+                    && r.task_id.is_none()
+                    && matches!(r.status, SpecialistStatus::Pending)
+            })
+            .map(|r| {
+                let is_contrarian = r.is_contrarian;
+                let role = r.role.clone();
+                let description = if is_contrarian {
+                    format!("{mode_name} contrarian specialist {slot}/{n}", slot = r.slot)
+                } else {
+                    format!("{mode_name} specialist {slot}/{n}", slot = r.slot)
+                };
+                let angle = specialist_angle(r.slot, n, is_contrarian);
+                let prompt = format!(
+                    "You are specialist slot {slot} of {n} on a **mandatory** {mode_name} effort-mode \
+                     analytic team (join-all). The shell launched you as a replacement / recovery \
+                     spawn; do not spawn further subagents.\n\
+                     \n\
+                     **Role:** {role}\n\
+                     **Analytic angle:** {angle}\n\
+                     \n\
+                     **User task:**\n{task}\n\
+                     \n\
+                     Produce a structured specialist report: findings, evidence (paths/symbols), \
+                     risks, and an independent verdict. Stay analytic and non-writing \
+                     (read/search only). End with a short summary the lead agent can synthesize.",
+                    slot = r.slot,
+                );
+                SpecialistBrief {
+                    slot: r.slot,
+                    role,
+                    is_contrarian,
+                    description,
+                    prompt,
+                }
+            })
+            .collect()
+    }
+
+    /// Whether a specialist report body is non-empty enough to count toward N
+    /// (tech-spec §4.1: empty "ok" / whitespace-only must not count).
+    pub fn report_body_counts_toward_n(body: &str) -> bool {
+        let t = body.trim();
+        if t.is_empty() {
+            return false;
+        }
+        // Thin placeholders that are not task-relevant reports.
+        let lower = t.to_ascii_lowercase();
+        !matches!(
+            lower.as_str(),
+            "ok" | "okay" | "done" | "success" | "yes" | "no" | "n/a" | "none"
+        )
+    }
+
+    /// Map a join result (success flag + body + cancelled) to ledger status.
+    pub fn specialist_status_from_join(
+        success: bool,
+        cancelled: bool,
+        body: &str,
+    ) -> SpecialistStatus {
+        if cancelled {
+            return SpecialistStatus::Cancelled;
+        }
+        if !success {
+            return SpecialistStatus::Failed;
+        }
+        if Self::report_body_counts_toward_n(body) {
+            SpecialistStatus::Success
+        } else {
+            SpecialistStatus::EmptyReport
+        }
     }
 
     /// Snapshot fields for TUI chrome (mode pill + S of N + Partial/Waived).
@@ -1119,6 +1343,23 @@ pub fn is_trivial_task(task: &str) -> bool {
             || t == "thanks")
 }
 
+/// User message that grants one hard-stop replace wave (tech-spec §4.4).
+pub fn is_hard_stop_continue_request(task: &str) -> bool {
+    let t = task.trim().to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "continue"
+            | "continue."
+            | "continue!"
+            | "yes continue"
+            | "keep going"
+            | "retry"
+            | "retry failed"
+            | "one more wave"
+            | "replace wave"
+    )
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1171,6 +1412,144 @@ mod tests {
         let snap = t.snapshot();
         let restored = EffortModeTracker::from_snapshot(tmp(), snap);
         assert_eq!(restored.mode(), EffortMode::Heavy);
+    }
+
+    #[test]
+    fn snapshot_restores_synthesis_after_partial_and_full() {
+        // Partial abort unlock must survive resume.
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        t.record_outcome(0, SpecialistStatus::Success, Some("a".into()))
+            .unwrap();
+        t.abort_team();
+        t.mark_partial_synthesis();
+        assert!(t.synthesis_complete());
+        assert!(t.may_execute_writes(false).is_ok());
+        let snap = t.snapshot();
+        let restored = EffortModeTracker::from_snapshot(tmp(), snap);
+        assert_eq!(restored.pursuit(), PursuitState::PartialReport);
+        assert!(restored.synthesis_complete());
+        assert!(restored.may_execute_writes(false).is_ok());
+
+        // Full-team Idle + synthesis_complete must survive resume.
+        let mut full = EffortModeTracker::new(tmp());
+        full.set_mode(EffortMode::Expert, false);
+        full.begin_team_run().unwrap();
+        for i in 0..4 {
+            full.record_outcome(i, SpecialistStatus::Success, Some(format!("t{i}")))
+                .unwrap();
+        }
+        full.mark_synthesis_complete().unwrap();
+        let snap = full.snapshot();
+        let restored = EffortModeTracker::from_snapshot(tmp(), snap);
+        assert_eq!(restored.pursuit(), PursuitState::Idle);
+        assert!(restored.synthesis_complete());
+        assert!(restored.may_execute_writes(false).is_ok());
+    }
+
+    #[test]
+    fn short_terminal_team_reopens_on_next_turn() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        for i in 0..4 {
+            t.record_outcome(i, SpecialistStatus::Failed, None).unwrap();
+        }
+        assert!(t.all_fixed_slots_terminal());
+        assert!(!t.synthesis_complete());
+        assert!(matches!(
+            t.may_execute_writes(false),
+            Err(EffortGateError::ExecuteBeforeSynthesis)
+        ));
+        // Next non-trivial turn must not stick: reopen fresh team.
+        assert!(t
+            .on_session_turn_start("architect multi-file auth migration")
+            .unwrap());
+        assert_eq!(t.pursuit(), PursuitState::Pursuing);
+        assert!(t.needs_mandatory_fanout());
+        assert_eq!(t.successful_count(), 0);
+        assert!(t.ledger().iter().all(|r| r.status == SpecialistStatus::Pending));
+    }
+
+    #[test]
+    fn replace_wave_prepares_failed_slots() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        t.record_outcome(0, SpecialistStatus::Success, Some("ok".into()))
+            .unwrap();
+        t.record_outcome(1, SpecialistStatus::Failed, None).unwrap();
+        t.record_outcome(2, SpecialistStatus::EmptyReport, None)
+            .unwrap();
+        t.record_outcome(3, SpecialistStatus::Timeout, None).unwrap();
+        assert!(t.try_prepare_replace_wave());
+        assert_eq!(t.replaceable_slots().len(), 0); // already Pending
+        assert!(t.needs_mandatory_fanout());
+        let pending: Vec<_> = t
+            .ledger()
+            .iter()
+            .filter(|r| r.status == SpecialistStatus::Pending)
+            .map(|r| r.slot)
+            .collect();
+        assert_eq!(pending, vec![1, 2, 3]);
+        // Success slot untouched.
+        assert_eq!(t.ledger()[0].status, SpecialistStatus::Success);
+        assert_eq!(t.successful_count(), 1);
+    }
+
+    #[test]
+    fn empty_join_body_maps_to_empty_report() {
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(true, false, "ok"),
+            SpecialistStatus::EmptyReport
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(true, false, "   "),
+            SpecialistStatus::EmptyReport
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(
+                true,
+                false,
+                "Findings: auth middleware lacks timeout."
+            ),
+            SpecialistStatus::Success
+        );
+        assert_eq!(
+            EffortModeTracker::specialist_status_from_join(false, true, "cancelled"),
+            SpecialistStatus::Cancelled
+        );
+        assert!(!EffortModeTracker::report_body_counts_toward_n("ok"));
+        assert!(EffortModeTracker::report_body_counts_toward_n(
+            "risk: shared .grok tree"
+        ));
+    }
+
+    #[test]
+    fn hard_stop_continue_request_grants_wave() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        for i in 0..4 {
+            t.record_outcome(i, SpecialistStatus::Failed, None).unwrap();
+        }
+        // Exhaust replace budget without free slots left (per-slot cap).
+        assert!(t.try_prepare_replace_wave()); // wave 1
+        for i in 0..4 {
+            t.record_outcome(i, SpecialistStatus::Failed, Some(format!("r{i}")))
+                .unwrap();
+        }
+        // Wave 2: per-slot cap exhausted → forced hard-stop.
+        assert!(!t.try_prepare_replace_wave());
+        assert!(t.is_hard_stop());
+        assert!(t
+            .on_session_turn_start("continue")
+            .unwrap()
+            == false);
+        // continue_wave_pending set; is_hard_stop false until wave launches.
+        assert!(!t.is_hard_stop());
+        assert!(t.try_prepare_replace_wave()); // consumes continue
     }
 
     #[test]

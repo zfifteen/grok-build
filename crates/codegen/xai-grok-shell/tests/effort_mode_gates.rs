@@ -119,6 +119,87 @@ fn sticky_mode_snapshot_round_trip() {
 }
 
 #[test]
+fn snapshot_resume_keeps_partial_and_full_synthesis_unlock() {
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Expert, false);
+    t.begin_team_run().unwrap();
+    t.on_session_specialist_outcome(0, SpecialistStatus::Success, Some("a".into()))
+        .unwrap();
+    let _ = t.on_session_user_cancel();
+    assert!(t.synthesis_complete());
+    assert!(t.may_execute_writes(false).is_ok());
+    let restored = EffortModeTracker::from_snapshot(tmp(), t.snapshot());
+    assert!(restored.synthesis_complete());
+    assert!(restored.may_execute_writes(false).is_ok());
+    assert_eq!(restored.pursuit(), PursuitState::PartialReport);
+
+    let mut full = EffortModeTracker::new(tmp());
+    full.set_mode(EffortMode::Expert, false);
+    full.begin_team_run().unwrap();
+    for i in 0..4 {
+        full.on_session_specialist_outcome(i, SpecialistStatus::Success, Some(format!("t{i}")))
+            .unwrap();
+    }
+    assert!(full.synthesis_complete());
+    let restored = EffortModeTracker::from_snapshot(tmp(), full.snapshot());
+    assert!(restored.synthesis_complete());
+    assert!(restored.may_execute_writes(false).is_ok());
+}
+
+#[test]
+fn short_team_next_turn_reopens_mandatory_fanout() {
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Expert, false);
+    t.on_session_turn_start("architect multi-file auth migration")
+        .unwrap();
+    for i in 0..4 {
+        t.on_session_specialist_outcome(i, SpecialistStatus::Failed, None)
+            .unwrap();
+    }
+    assert!(!t.synthesis_complete());
+    assert!(matches!(
+        t.may_execute_writes(false),
+        Err(EffortGateError::ExecuteBeforeSynthesis)
+    ));
+    assert!(t
+        .on_session_turn_start("architect multi-file retry of auth")
+        .unwrap());
+    assert!(t.needs_mandatory_fanout());
+    assert_eq!(t.ledger().len(), 4);
+}
+
+#[test]
+fn replace_wave_and_empty_body_do_not_count() {
+    let mut t = EffortModeTracker::new(tmp());
+    t.set_mode(EffortMode::Expert, false);
+    t.begin_team_run().unwrap();
+    t.on_session_specialist_outcome(0, SpecialistStatus::Success, Some("ok-body".into()))
+        .unwrap();
+    t.on_session_specialist_outcome(1, SpecialistStatus::Failed, None)
+        .unwrap();
+    t.on_session_specialist_outcome(2, SpecialistStatus::Failed, None)
+        .unwrap();
+    t.on_session_specialist_outcome(3, SpecialistStatus::Failed, None)
+        .unwrap();
+    assert!(t.try_prepare_replace_wave());
+    assert!(t.needs_mandatory_fanout());
+
+    // Empty join body → EmptyReport, not Success.
+    assert_eq!(
+        EffortModeTracker::specialist_status_from_join(true, false, "ok"),
+        SpecialistStatus::EmptyReport
+    );
+    assert_eq!(
+        EffortModeTracker::specialist_status_from_join(
+            true,
+            false,
+            "Detailed findings about the auth path."
+        ),
+        SpecialistStatus::Success
+    );
+}
+
+#[test]
 fn expert_full_team_requires_4_successes() {
     let mut t = EffortModeTracker::new(tmp());
     t.set_mode(EffortMode::Expert, false);

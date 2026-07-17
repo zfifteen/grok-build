@@ -430,9 +430,24 @@ impl SessionActor {
     /// Shell-owned mandatory Expert/Heavy fan-out: spawn N specialists,
     /// join-all, record ledger outcomes, inject report package for the leader.
     ///
-    /// Runs only when `needs_mandatory_fanout()` (pending unbound slots).
-    /// Does **not** rely on the model calling `spawn_subagent`.
+    /// Also runs automatic replace waves (up to `max_replace_waves`) when the
+    /// first join is short, and a hard-stop `continue` wave when the user
+    /// granted one. Does **not** rely on the model calling `spawn_subagent`.
     pub(super) async fn maybe_run_mandatory_effort_team(&self, task_text: &str) {
+        // Prepare replace / continue wave if prior join left replaceable slots.
+        {
+            let mut tracker = self.effort_mode.lock();
+            if tracker.try_prepare_replace_wave() {
+                tracing::info!(
+                    session_id = %self.session_info.id.0,
+                    "effort mode: prepared replace / continue wave"
+                );
+                drop(tracker);
+                self.persist_effort_mode_state();
+                self.emit_effort_chrome_update();
+            }
+        }
+
         let (needs, mode) = {
             let tracker = self.effort_mode.lock();
             (tracker.needs_mandatory_fanout(), tracker.mode())
@@ -462,13 +477,29 @@ impl SessionActor {
         let cwd = Some(self.session_info.cwd.clone());
         let parent_session_id = self.session_info.id.0.to_string();
 
-        let n = mode.team_size_default().unwrap_or(0);
-        let planned = crate::session::effort_team::plan_mandatory_team(mode, task_text);
+        // Full team or only Pending recovery slots (replace wave).
+        let planned = {
+            let tracker = self.effort_mode.lock();
+            let pending = tracker.pending_slot_briefs(task_text);
+            let full_n = mode.team_size_default().unwrap_or(0);
+            if pending.len() == full_n && full_n > 0 {
+                // Fresh full team — use the standard planner (same briefs).
+                drop(tracker);
+                crate::session::effort_team::plan_mandatory_team(mode, task_text)
+            } else if !pending.is_empty() {
+                crate::session::effort_team::plan_pending_slots(pending)
+            } else {
+                return;
+            }
+        };
         if planned.is_empty() {
             return;
         }
 
-        // Pre-bind every slot → task_id (Running) before spawn so join maps 1:1.
+        let n = mode.team_size_default().unwrap_or(0);
+        let wave_size = planned.len();
+
+        // Pre-bind every planned slot → task_id (Running) before spawn so join maps 1:1.
         {
             let mut tracker = self.effort_mode.lock();
             for p in &planned {
@@ -487,7 +518,7 @@ impl SessionActor {
             }
             drop(tracker);
             self.persist_effort_mode_state();
-            // Show Expert/Heavy 0 of N before specialists finish.
+            // Show Expert/Heavy S of N before specialists finish.
             self.emit_effort_chrome_update();
         }
 
@@ -495,43 +526,84 @@ impl SessionActor {
             session_id = %self.session_info.id.0,
             mode = mode.as_str(),
             n,
+            wave_size,
             "effort mode: launching mandatory specialist team"
         );
 
-        let joins = crate::session::effort_team::run_planned_team(
-            &event_tx,
-            &parent_session_id,
-            parent_prompt_id,
-            cwd,
-            planned,
-        )
-        .await;
+        // Join-all loop: first wave + automatic replace waves within budget.
+        let mut all_joins: Vec<crate::session::effort_team::SpecialistJoinResult> = Vec::new();
+        let mut current_planned = planned;
 
-        // Apply join results by slot (source of truth for this orchestration).
-        {
-            let mut tracker = self.effort_mode.lock();
-            for join in &joins {
-                let status = if join.cancelled {
-                    crate::session::effort_mode::SpecialistStatus::Cancelled
-                } else if join.success {
-                    crate::session::effort_mode::SpecialistStatus::Success
-                } else {
-                    crate::session::effort_mode::SpecialistStatus::Failed
-                };
-                if let Err(e) = tracker.on_session_specialist_outcome(
-                    join.brief.slot,
-                    status,
-                    Some(join.task_id.clone()),
-                ) {
-                    tracing::debug!(
-                        session_id = %self.session_info.id.0,
-                        task_id = %join.task_id,
-                        slot = join.brief.slot,
-                        error = %e,
-                        "effort mode: join record failed"
+        loop {
+            let joins = crate::session::effort_team::run_planned_team(
+                &event_tx,
+                &parent_session_id,
+                parent_prompt_id.clone(),
+                cwd.clone(),
+                current_planned,
+            )
+            .await;
+
+            {
+                let mut tracker = self.effort_mode.lock();
+                for join in &joins {
+                    let status =
+                        crate::session::effort_mode::EffortModeTracker::specialist_status_from_join(
+                            join.success,
+                            join.cancelled,
+                            &join.body,
+                        );
+                    if let Err(e) = tracker.on_session_specialist_outcome(
+                        join.brief.slot,
+                        status,
+                        Some(join.task_id.clone()),
+                    ) {
+                        tracing::debug!(
+                            session_id = %self.session_info.id.0,
+                            task_id = %join.task_id,
+                            slot = join.brief.slot,
+                            error = %e,
+                            "effort mode: join record failed"
+                        );
+                    }
+                }
+                all_joins.extend(joins);
+
+                // Auto replace-wave while budget remains and still short.
+                if tracker.synthesis_complete() {
+                    break;
+                }
+                if !tracker.try_prepare_replace_wave() {
+                    break;
+                }
+                let next_briefs = tracker.pending_slot_briefs(task_text);
+                if next_briefs.is_empty() {
+                    break;
+                }
+                current_planned =
+                    crate::session::effort_team::plan_pending_slots(next_briefs);
+                // Pre-bind replace slots.
+                for p in &current_planned {
+                    let _ = tracker.record_outcome(
+                        p.brief.slot,
+                        crate::session::effort_mode::SpecialistStatus::Running,
+                        Some(p.task_id.clone()),
                     );
                 }
+                drop(tracker);
+                self.persist_effort_mode_state();
+                self.emit_effort_chrome_update();
+                tracing::info!(
+                    session_id = %self.session_info.id.0,
+                    wave_size = current_planned.len(),
+                    "effort mode: launching automatic replace wave"
+                );
+                continue;
             }
+        }
+
+        {
+            let tracker = self.effort_mode.lock();
             let progress = tracker.progress_label();
             let synth = tracker.synthesis_complete();
             let hard_stop = tracker.is_hard_stop();
@@ -539,10 +611,15 @@ impl SessionActor {
             self.persist_effort_mode_state();
 
             // Package reports for the leader (success and failure bodies).
-            let report_pairs: Vec<_> = joins
-                .iter()
-                .map(|j| (j.brief.clone(), j.body.clone()))
-                .collect();
+            // Prefer latest body per slot (replace wave overwrites earlier).
+            let mut latest: std::collections::BTreeMap<
+                usize,
+                (crate::session::effort_mode::SpecialistBrief, String),
+            > = std::collections::BTreeMap::new();
+            for j in &all_joins {
+                latest.insert(j.brief.slot, (j.brief.clone(), j.body.clone()));
+            }
+            let report_pairs: Vec<_> = latest.into_values().collect();
             let package = crate::session::effort_mode::format_team_report_package(
                 mode,
                 &progress,
@@ -557,12 +634,15 @@ impl SessionActor {
             } else if hard_stop {
                 body.push_str(&format!(
                     "\n**Hard-stop:** team short of N ({progress}). Writes stay blocked. \
-                     User choices: continue (one more replace wave), --solo, or /normal."
+                     User choices: continue (one more replace wave on the next turn), \
+                     --solo, or /normal. A new non-trivial user turn without continue \
+                     restarts a fresh team."
                 ));
             } else {
                 body.push_str(&format!(
                     "\nTeam incomplete ({progress}). Writes stay blocked until full claim, \
-                     abort/partial, --solo, or /normal."
+                     abort/partial, --solo, or /normal. The next non-trivial user turn \
+                     restarts a fresh team if still short."
                 ));
             }
             self.push_system_reminder_with_tag(&body, self.reminder_wrapper_tag());
