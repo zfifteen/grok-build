@@ -81,7 +81,27 @@ This clone is public `zfifteen/powergrok`. Contribution path (PR upstream vs for
 
 ---
 
-## Q10 — Relationship to grok.com Expert/Heavy
+## Q10 — Reasoning brains (method diversity) — **FROZEN for planning**
+
+**Context:** Fixed-N specialists used generic angles (`specialist-i` + 4-way topic cycle). Principal wants **16 distinct reasoning protocols** (“brains”), not cosplay personas. Value is **method deltas**.
+
+**Frozen (see [07-reasoning-brains-implementation-plan.md](./07-reasoning-brains-implementation-plan.md)):**
+
+| Item | Decision |
+|------|----------|
+| Count | **16** brains |
+| Heavy | **All 16** |
+| Expert | **Random 4 of 16** per team run (uniform, no multi-family constraint in v1) |
+| Config | `$GROK_HOME/effort-brains/` (+ project `.powergrok/effort-brains` merge-by-id) |
+| Contrarian class | `inversion`, `pre_mortem`, `red_team` |
+| Layers v1 | Protocol + artifact schema; model overrides optional later |
+| Seed | Optional `GROK_EFFORT_BRAIN_SEED` for reproducible Expert draws |
+
+**Not frozen / deferred:** multi-family Expert sampling, two-wave Heavy, mandatory multi-model.
+
+---
+
+## Q11 — Relationship to grok.com Expert/Heavy
 
 Product should mirror **mental model** (4 vs 16 depth), not server multi-agent API. Confirm marketing/docs language avoids claiming identical backend.
 
@@ -95,4 +115,5 @@ Product should mirror **mental model** (4 vs 16 depth), not server multi-agent A
 | 2026-07-15 | **Q1 = A Persist** — override Spec 10 decision 16 for EffortMode resume; mirror plan_mode.json | Principal (via PR review address) + Grok |
 | 2026-07-15 | Hard-stop `continue` = exactly one extra replace wave (tech spec §4.4) | Grok (Hermes freeze item) |
 | 2026-07-15 | Feature flag off must **unregister** builtin names (not only idle runtime) | Grok (Hermes freeze item) |
+| 2026-07-17 | **Q10 frozen for planning** — 16 reasoning brains; Expert random 4; Heavy all 16; config under `$GROK_HOME/effort-brains` | Principal + Hermes |
 | | | |

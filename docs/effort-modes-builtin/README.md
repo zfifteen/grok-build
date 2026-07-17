@@ -39,6 +39,8 @@ Phase 1 does **not** change runtime behavior.
 | [04-test-plan.md](./04-test-plan.md) | How we prove correctness in this codebase |
 | [05-skills-coexistence-and-migration.md](./05-skills-coexistence-and-migration.md) | Skills v1 → builtins transition |
 | [06-open-questions.md](./06-open-questions.md) | Decisions still open |
+| [07-reasoning-brains-implementation-plan.md](./07-reasoning-brains-implementation-plan.md) | **16 reasoning brains** for Expert (random 4) / Heavy (all 16); config under `$GROK_HOME/effort-brains` |
+
 
 ## Prior art (external SoT for behavior)
 
