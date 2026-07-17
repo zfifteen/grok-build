@@ -49,6 +49,12 @@ pub use paths::{
     default_grok_home, encode_cwd_dirname, ensure_sessions_cwd_dir, grok_application, grok_home,
     sessions_cwd_dir, system_config_dir, user_grok_home,
 };
+
+// Always compiled so call sites can use product_name() without feature-gated
+// imports (default builds must stay green; Model A lives inside the helpers).
+pub mod branding;
+pub use branding::{is_powergrok_branding, product_name};
+
 pub use validation::{
     RequirementsError, RequirementsLayer, RequirementsSource, fail_closed_flag_from_str,
     load_merged_requirements, requirements_layers, validate_requirements,

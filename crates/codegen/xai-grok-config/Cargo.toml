@@ -31,8 +31,13 @@ core-foundation = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# For testing the powergrok branding adapter with env var.
+serial_test = { workspace = true }
 
 [features]
+# Enables Power Grok branding, isolation overrides, and adapter helpers.
+# Activated via the composition-root binary and install wrapper.
+powergrok = []
 
 [lints]
 workspace = true

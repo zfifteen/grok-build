@@ -4,15 +4,17 @@
 **Date:** 2026-07-15  
 **Authority:** Principal direction in #grok-build — reopen original product implementation goal; Phase 1 = documentation.
 
+**Branding:** Updated to "Power Grok" per BRANDING_PLAN.md. Technical upstream references remain "Grok Build".
+
 ---
 
 ## 1. Mission
 
-Ship **Expert**, **Heavy**, and **Normal** as **first-party Grok Build session effort modes**: shell builtins, sticky session state, TUI chrome, and (for non-trivial work) **hard local multi-agent orchestration** with fixed team sizes.
+Ship **Expert**, **Heavy**, and **Normal** as **first-party Power Grok session effort modes**: shell builtins, sticky session state, TUI chrome, and (for non-trivial work) **hard local multi-agent orchestration** with fixed team sizes.
 
 | Mode | Fixed successful specialists | Notes |
 |------|------------------------------|--------|
-| **Normal** | none required | Default Grok Build |
+| **Normal** | none required | Default Power Grok |
 | **Expert** | **exactly 4** | High quality, interactive team depth |
 | **Heavy** | **exactly 16**, ≥1 contrarian | Maximum local multi-agent depth |
 

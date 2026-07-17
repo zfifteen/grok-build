@@ -34,6 +34,7 @@ impl From<&Doc> for DocEntry {
 
 // ── Static doc tables ────────────────────────────────────────────────────────
 
+#[cfg(not(feature = "powergrok"))]
 macro_rules! guide {
     ($file:literal, $title:literal, $desc:literal) => {
         Doc {
@@ -41,6 +42,18 @@ macro_rules! guide {
             title: $title,
             description: $desc,
             content: include_str!(concat!("../docs/user-guide/", $file)),
+        }
+    };
+}
+
+#[cfg(feature = "powergrok")]
+macro_rules! guide {
+    ($file:literal, $title:literal, $desc:literal) => {
+        Doc {
+            filename: $file,
+            title: $title,
+            description: $desc,
+            content: include_str!(concat!(env!("POWERGROK_USER_GUIDE_DIR"), "/", $file)),
         }
     };
 }

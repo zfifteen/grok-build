@@ -45,6 +45,7 @@ use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
 use xai_grok_update::{UpdateConfig, auto_update, enforce_minimum_version_or_exit};
+use xai_grok_config::product_name;
 /// Apply headless args to an existing config, only overriding values that are
 /// explicitly set. This allows environment defaults to be preserved when
 /// specific args are not provided.
@@ -878,7 +879,8 @@ async fn run_agent_command(
     let is_leader = matches!(agent_args.mode, Some(AgentCmd::Leader(_)));
     if !is_stdio && !is_leader {
         eprintln!(
-            "Grok Build (pager) - v{}",
+            "{} (pager) - v{}",
+            product_name(),
             xai_grok_version::display_version_with_commit(
                 env!("VERSION_WITH_COMMIT"),
                 xai_grok_update::channel_label(),
@@ -2890,4 +2892,8 @@ mod tests {
             "Err output must pass through unchanged",
         );
     }
+
+    // B10 help branding is covered by tests/branding_integration.rs
+    // (CARGO_BIN_EXE under --features powergrok). Do not reintroduce a nested
+    // `cargo run` unit test here.
 }

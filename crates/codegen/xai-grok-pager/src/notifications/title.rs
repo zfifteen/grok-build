@@ -4,6 +4,7 @@ use crossterm::terminal::SetTitle;
 
 use super::config::{TitleConfig, TitleItem};
 use crate::acp::tracker::TurnActivity;
+use xai_grok_config::product_name;
 
 const TITLE_SPINNER: &[char] = &[
     '\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}', '\u{2834}', '\u{2826}', '\u{2827}',
@@ -113,9 +114,11 @@ impl TitleManager {
     }
 
     pub fn reset(&mut self) -> String {
-        let esc = build_title_escape("grok");
+        // Single source of truth: same product name as help/about chrome.
+        let brand = product_name();
+        let esc = build_title_escape(brand);
         self.last_title.clear();
-        self.last_title.push_str("grok");
+        self.last_title.push_str(brand);
         self.spinner_frame = 0;
         self.tick_count = 0;
         esc
@@ -134,7 +137,8 @@ fn write_item(
     match item {
         TitleItem::Grok => {
             push_separator(buf, has_parts);
-            buf.push_str("grok");
+            // Same product name as reset()/help ("Power Grok" under Model A).
+            buf.push_str(product_name());
         }
         TitleItem::Spinner => {
             if !state.is_busy && state.activity.is_none() {

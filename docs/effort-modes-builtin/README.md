@@ -1,9 +1,11 @@
-# Effort Modes as Grok Build Builtins
+# Effort Modes as Power Grok Builtins
 
 **Program:** Promote Expert / Heavy / Normal from skills-first v1 into **first-party shell + TUI builtins**.  
 **Phase 1 (this package):** documentation only — tech specs, architecture map, implementation plan, test plan, migration, open questions.  
 **Status:** Phase 1 draft opened 2026-07-15 in product source (`zfifteen/powergrok` clone).  
 **Product cwd:** this repository root.
+
+**Branding note:** This document has been updated to refer to "Power Grok" per the branding plan. All technical references to the upstream project remain "Grok Build".
 
 ## Why this exists
 
@@ -37,6 +39,8 @@ Phase 1 does **not** change runtime behavior.
 | [04-test-plan.md](./04-test-plan.md) | How we prove correctness in this codebase |
 | [05-skills-coexistence-and-migration.md](./05-skills-coexistence-and-migration.md) | Skills v1 → builtins transition |
 | [06-open-questions.md](./06-open-questions.md) | Decisions still open |
+| [07-reasoning-brains-implementation-plan.md](./07-reasoning-brains-implementation-plan.md) | **16 reasoning brains** for Expert (random 4) / Heavy (all 16); config under `$GROK_HOME/effort-brains` |
+
 
 ## Prior art (external SoT for behavior)
 

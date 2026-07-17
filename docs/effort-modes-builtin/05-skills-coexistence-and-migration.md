@@ -62,7 +62,7 @@ During Phases 2–4:
 
 ### M4 — Deprecation (optional, later)
 
-- Ship skill stubs that only print: mode is a product builtin; run `/expert` on current Grok Build.  
+- Ship skill stubs that only print: mode is a product builtin; run `/expert` on current Power Grok.  
 - Or remove global install from install script with major-version note.
 
 ---

@@ -86,7 +86,7 @@ pub(super) async fn fetch_plugin_cta_mcps(
 pub(super) fn format_acp_error(err: &acp::Error, is_api_key_auth: bool) -> String {
     if i32::from(err.code) == RATE_LIMITED_ERROR_CODE {
         if super::dispatch::acp_error_is_free_usage_exhausted(err) {
-            return super::dispatch::FREE_USAGE_USER_MESSAGE.into();
+            return super::dispatch::free_usage_user_message();
         }
         return rate_limited_user_message(is_api_key_auth).into();
     }
