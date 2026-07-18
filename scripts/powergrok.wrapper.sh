@@ -9,84 +9,101 @@
 #   2. Ensure home dir + seed config.toml if missing (auto_update = false only).
 #   3. exec the real binary whose basename is powergrok (G1 argv0; no exec -a).
 #   4. Refuse missing binary (127) and accidental official ~/.grok home (2).
-#
-# PHASE 1 SCAFFOLD — signatures + logic comments only. No executable body yet.
-# Implementation lands in Phase 3.
 
 set -euo pipefail
 
-# --- defaults (overridable by install-time rewrite or env) --------------------
+# BEGIN_POWERGROK_INSTALL_DEFAULTS
+# install-powergrok.sh replaces the next two assignments with absolute paths.
+POWERGROK_LIB_DEFAULT="${HOME}/.local/lib/powergrok"
+POWERGROK_HOME_DEFAULT="${HOME}/.powergrok"
+# END_POWERGROK_INSTALL_DEFAULTS
 
-# POWERGROK_LIB: directory containing the real named binary.
-# Logic: default $HOME/.local/lib/powergrok; install script may bake absolute path.
-: "${POWERGROK_LIB:=${HOME}/.local/lib/powergrok}"
-
-# REAL_BIN / POWERGROK_BIN: path to the real binary file named "powergrok".
-# Logic: basename MUST be powergrok so process argv0 supports project isolation.
+: "${POWERGROK_LIB:=${POWERGROK_LIB_DEFAULT}}"
 : "${POWERGROK_BIN:=${POWERGROK_LIB}/powergrok}"
 REAL_BIN="${POWERGROK_BIN}"
 
-# GROK_HOME resolution:
-#   POWERGROK_HOME wins if set, else existing GROK_HOME, else $HOME/.powergrok.
-# Logic: export after resolve so child process inherits Power Grok home only.
 resolve_grok_home() {
-  # PHASE 1: describe only
-  # 1. If POWERGROK_HOME is non-empty → use it.
-  # 2. Else if GROK_HOME is non-empty → use it (caller override).
-  # 3. Else → $HOME/.powergrok.
-  # 4. export GROK_HOME to the resolved value.
-  :
+  if [[ -n "${POWERGROK_HOME:-}" ]]; then
+    export GROK_HOME="${POWERGROK_HOME}"
+  elif [[ -n "${GROK_HOME:-}" ]]; then
+    export GROK_HOME
+  else
+    export GROK_HOME="${POWERGROK_HOME_DEFAULT}"
+  fi
 }
 
-# Refuse GROK_HOME that realpath-equals official ~/.grok unless escape hatch set.
-# Logic: compare physical paths of GROK_HOME and $HOME/.grok when both exist.
-# Exit 2 with clear stderr if equal and POWERGROK_ALLOW_OFFICIAL_HOME != 1.
-# Missing dirs: skip comparison (no false positive).
 refuse_official_home_if_collision() {
-  # PHASE 1: describe only
-  :
+  if [[ "${POWERGROK_ALLOW_OFFICIAL_HOME:-}" == "1" ]]; then
+    return 0
+  fi
+  local official="${HOME}/.grok"
+  if [[ ! -e "${GROK_HOME}" || ! -e "${official}" ]]; then
+    return 0
+  fi
+  local home_phys official_phys
+  home_phys="$(cd "${GROK_HOME}" && pwd -P 2>/dev/null)" || return 0
+  official_phys="$(cd "${official}" && pwd -P 2>/dev/null)" || return 0
+  if [[ "${home_phys}" == "${official_phys}" ]]; then
+    echo "powergrok: GROK_HOME resolves to official ~/.grok; aborting" >&2
+    echo "powergrok: set POWERGROK_HOME or POWERGROK_ALLOW_OFFICIAL_HOME=1 only if intentional" >&2
+    exit 2
+  fi
 }
 
-# Ensure $GROK_HOME exists; create seed config.toml only if absent.
-# Seed content (authoritative BUILD_PLAN §8.3):
-#   # Powergrok — local source-built install.
-#   [cli]
-#   auto_update = false
-# Never overwrite an existing config.toml. No telemetry keys.
 ensure_home_and_seed_config() {
-  # PHASE 1: describe only
-  :
+  mkdir -p "${GROK_HOME}"
+  local config="${GROK_HOME}/config.toml"
+  if [[ -f "${config}" ]]; then
+    return 0
+  fi
+  cat >"${config}" <<'EOF'
+# Powergrok — local source-built install.
+[cli]
+auto_update = false
+EOF
 }
 
-# Validate real binary is present and executable; exit 127 with rebuild hint.
 require_real_binary() {
-  # PHASE 1: describe only
-  # If ! -x "$REAL_BIN": stderr two lines (missing path + rebuild pointer), exit 127.
-  :
+  if [[ -x "${REAL_BIN}" ]]; then
+    return 0
+  fi
+  echo "powergrok: missing binary at ${REAL_BIN}" >&2
+  echo "powergrok: build and install: ./scripts/install-powergrok.sh" >&2
+  echo "powergrok: see docs/powergrok/BUILD_PLAN.md" >&2
+  exit 127
 }
 
-# Optional: refuse if REAL_BIN realpath equals official grok realpath.
-# Logic: if command -v grok and both resolve, compare; exit 2 on match.
-# Best-effort; skip if grok missing or realpath unavailable.
 refuse_if_binary_is_official_grok() {
-  # PHASE 1: describe only
-  :
+  local grok_path
+  grok_path="$(command -v grok 2>/dev/null || true)"
+  if [[ -z "${grok_path}" || ! -e "${REAL_BIN}" || ! -e "${grok_path}" ]]; then
+    return 0
+  fi
+  local real_phys grok_phys
+  real_phys="$(cd "$(dirname "${REAL_BIN}")" && pwd -P)/$(basename "${REAL_BIN}")"
+  # Prefer realpath when available for symlinks.
+  if command -v realpath >/dev/null 2>&1; then
+    real_phys="$(realpath "${REAL_BIN}" 2>/dev/null || echo "${real_phys}")"
+    grok_phys="$(realpath "${grok_path}" 2>/dev/null || true)"
+  else
+    grok_phys="$(cd "$(dirname "${grok_path}")" && pwd -P)/$(basename "${grok_path}")"
+  fi
+  if [[ -n "${grok_phys}" && "${real_phys}" == "${grok_phys}" ]]; then
+    echo "powergrok: real binary path equals official grok; aborting" >&2
+    exit 2
+  fi
 }
 
-# Main entry: resolve home → guards → seed → exec REAL_BIN "$@".
-# Never returns on success (exec replaces process). No exec -a.
 main() {
-  # PHASE 1: describe only
-  # resolve_grok_home
-  # require_real_binary
-  # refuse_official_home_if_collision
-  # refuse_if_binary_is_official_grok  (optional best-effort)
-  # ensure_home_and_seed_config
-  # exec "$REAL_BIN" "$@"
-  :
+  resolve_grok_home
+  require_real_binary
+  refuse_official_home_if_collision
+  refuse_if_binary_is_official_grok
+  ensure_home_and_seed_config
+  # Basename of REAL_BIN is "powergrok" → argv0 contract (G1). No exec -a.
+  exec "${REAL_BIN}" "$@"
 }
 
-# When this file is executed (not sourced), run main.
 if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
   main "$@"
 fi

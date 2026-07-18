@@ -183,29 +183,38 @@ Official released `grok` installers: [x.ai/cli](https://x.ai/cli).
 | Version stamp | `~/.local/lib/powergrok/VERSION` |
 | User home | `~/.powergrok` (`GROK_HOME`) |
 
+**Primary path (one command):**
+
 ```sh
 git clone https://github.com/zfifteen/powergrok.git
 cd powergrok
 git checkout powergrok
 git pull origin powergrok
 
+./scripts/install-powergrok.sh
+# release build + named binary + wrapper + seed config + VERSION
+
+# Ensure ~/.local/bin is on PATH, then:
+powergrok --version
+powergrok --help
+```
+
+Useful flags: `--dry-run`, `--no-build`, `--prefix DIR`, `--grok-home DIR`,
+`--uninstall`, `--purge-home`, `--no-install-completions`.  
+Full contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md) §9.
+
+**Manual steps** (reference only — prefer the installer):
+
+```sh
 cargo build -p xai-grok-pager-bin --release --features powergrok
 
 mkdir -p ~/.local/lib/powergrok ~/.local/bin ~/.powergrok
 install -m 755 target/release/xai-grok-pager ~/.local/lib/powergrok/powergrok
 
-cat > ~/.local/bin/powergrok <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-export GROK_HOME="${GROK_HOME:-$HOME/.powergrok}"
-export POWERGROK_BRANDING="${POWERGROK_BRANDING:-1}"
-exec "$HOME/.local/lib/powergrok/powergrok" "$@"
-EOF
-chmod +x ~/.local/bin/powergrok
-
-# Ensure ~/.local/bin is on PATH, then:
-powergrok --version
-powergrok --help
+# Prefer installing the maintained wrapper:
+#   ./scripts/install-powergrok.sh --no-build
+# Or copy scripts/powergrok.wrapper.sh to ~/.local/bin/powergrok and set
+# POWERGROK_LIB / GROK_HOME per BUILD_PLAN §5.2.
 ```
 
 First launch opens the product browser/account flow under **Power Grok’s home**
