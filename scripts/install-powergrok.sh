@@ -619,14 +619,20 @@ print_status() {
   echo "prev_binary:  ${PREV_BIN_PATH}$([[ -e "${PREV_BIN_PATH}" ]] && echo " (present — rollback available)" || echo " (none)")"
   echo "VERSION_file: ${VERSION_PATH}"
   if [[ -f "${VERSION_PATH}" ]]; then
-    sed 's/^/  /' "${VERSION_PATH}"
+    if grep -Eq '^state=rolled-back' "${VERSION_PATH}" 2>/dev/null; then
+      echo "  state: rolled-back (restored from powergrok.prev — not a commit SHA)"
+      sed 's/^/  /' "${VERSION_PATH}"
+    else
+      sed 's/^/  /' "${VERSION_PATH}"
+    fi
   else
     echo "  (missing — run ./scripts/install-powergrok.sh)"
   fi
   echo "GROK_HOME:    ${GROK_HOME_OPT}"
   local config="${GROK_HOME_OPT}/config.toml"
+  # auto_update check aligned with installer: assignment = false, not substring.
   if [[ -f "${config}" ]]; then
-    if grep -Eq '^[[:space:]]*auto_update[[:space:]]*=[[:space:]]*false' "${config}"; then
+    if grep -Eq '^[[:space:]]*auto_update[[:space:]]*=[[:space:]]*false([[:space:]]|#|$)' "${config}"; then
       echo "auto_update:  false (seed intact)"
     elif grep -Eq '^[[:space:]]*auto_update[[:space:]]*=' "${config}"; then
       echo "auto_update:  $(grep -E '^[[:space:]]*auto_update[[:space:]]*=' "${config}" | head -1 | sed 's/^[[:space:]]*//')"
@@ -647,6 +653,9 @@ print_status() {
   if [[ "${CHECK_FRESHNESS}" -eq 1 ]]; then
     echo
     echo "=== Freshness (advisory only — never auto-installs) ==="
+    echo "note: may run 'git fetch origin powergrok' (updates remote-tracking refs only;"
+    echo "      never downloads or installs Power Grok bits)."
+    echo "note: checkout lag below is repo HEAD vs origin/powergrok — not installed binary vs origin."
     if [[ -z "${REPO_ROOT}" ]] || [[ ! -d "${REPO_ROOT}/.git" ]]; then
       soft_resolve_repo_root || true
     fi
@@ -657,7 +666,7 @@ print_status() {
     local head remote ahead
     head="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo "repo: ${REPO_ROOT}"
-    echo "HEAD: ${head}"
+    echo "checkout_HEAD: ${head}"
     if git -C "${REPO_ROOT}" rev-parse --verify origin/powergrok >/dev/null 2>&1; then
       # Best-effort fetch; ignore network failure.
       if [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -669,7 +678,7 @@ print_status() {
       remote="$(git -C "${REPO_ROOT}" rev-parse --short origin/powergrok 2>/dev/null || echo unknown)"
       echo "origin/powergrok: ${remote}"
       ahead="$(git -C "${REPO_ROOT}" rev-list --count HEAD..origin/powergrok 2>/dev/null || echo "?")"
-      echo "commits_behind_origin_powergrok: ${ahead}"
+      echo "checkout_commits_behind_origin_powergrok: ${ahead}"
       if [[ "${ahead}" != "0" && "${ahead}" != "?" ]]; then
         echo "advice: git pull origin powergrok && ./scripts/install-powergrok.sh"
         echo "(no automatic download or install performed)"
@@ -680,14 +689,19 @@ print_status() {
       echo "origin/powergrok: not available (fetch remotes first)"
     fi
     if [[ -f "${VERSION_PATH}" ]]; then
-      local inst_sha
+      local inst_sha inst_state
+      inst_state="$(grep -E '^state=' "${VERSION_PATH}" | head -1 | cut -d= -f2- || true)"
       inst_sha="$(grep -E '^git=' "${VERSION_PATH}" | head -1 | cut -d= -f2- || true)"
-      echo "installed_VERSION_git: ${inst_sha:-unknown}"
-      if [[ -n "${inst_sha}" && "${inst_sha}" != "unknown" ]]; then
-        local full_head
-        full_head="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
-        if [[ -n "${full_head}" && "${inst_sha}" != "${full_head}" ]]; then
-          echo "note: installed binary SHA differs from repo HEAD — reinstall to refresh"
+      if [[ "${inst_state}" == "rolled-back" || "${inst_sha}" == "rollback-from-prev" || "${inst_sha}" == "(unknown)" ]]; then
+        echo "installed_VERSION: rolled-back from powergrok.prev (not a commit SHA — reinstall after pull)"
+      else
+        echo "installed_VERSION_git: ${inst_sha:-unknown}"
+        if [[ -n "${inst_sha}" && "${inst_sha}" != "unknown" ]]; then
+          local full_head
+          full_head="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
+          if [[ -n "${full_head}" && "${inst_sha}" != "${full_head}" ]]; then
+            echo "note: installed binary SHA differs from checkout HEAD — reinstall to refresh binary"
+          fi
         fi
       fi
     fi
@@ -715,23 +729,24 @@ rollback_powergrok() {
   fi
 
   mkdir -p "${LIB_DIR}"
-  # Keep a one-shot copy of the binary we are leaving (optional forensics).
+  # Optional one-shot forensics copy of the binary we are leaving (documented in LIFECYCLE.md).
   if [[ -e "${REAL_BIN_PATH}" ]]; then
     cp -p "${REAL_BIN_PATH}" "${LIB_DIR}/powergrok.before-rollback" || true
   fi
   install -m 755 "${PREV_BIN_PATH}" "${REAL_BIN_PATH}"
   {
-    echo "git=rollback-from-prev"
+    echo "state=rolled-back"
+    echo "git=(unknown)"
     echo "branch=n/a"
     echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "features=${CARGO_FEATURES}"
     echo "artifact=powergrok.prev"
-    echo "note=restored from ${PREV_BIN_PATH}; re-run installer after git pull for a proper VERSION"
+    echo "note=restored from powergrok.prev; re-run installer after git pull for a proper git= SHA"
   } >"${VERSION_PATH}"
   log "rollback complete; wrapper and GROK_HOME untouched; official grok untouched"
   echo "Restored: ${REAL_BIN_PATH}"
   echo "From:     ${PREV_BIN_PATH}"
-  echo "VERSION:  ${VERSION_PATH} (rollback stamp)"
+  echo "VERSION:  ${VERSION_PATH} (state=rolled-back — not a commit SHA)"
 }
 
 do_install() {

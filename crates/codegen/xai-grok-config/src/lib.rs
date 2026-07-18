@@ -62,7 +62,8 @@ pub use project_bootstrap::{
     BootstrapStatus, BOOTSTRAP_CATEGORIES,
 };
 pub use install_status::{
-    current_install_version, format_install_status_report, read_install_version_file,
+    config_has_auto_update_false, config_has_auto_update_key, current_install_version,
+    format_install_status_report, prev_binary_beside_current_exe, read_install_version_file,
     version_path_beside_current_exe, InstallVersionStamp,
 };
 

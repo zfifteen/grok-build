@@ -427,8 +427,12 @@ exit 0' >"${fake2}"
     echo "  FAIL expected V1 after rollback got ${body}" >&2
     FAIL=$((FAIL + 1))
   }
-  grep -q 'rollback-from-prev' "${tmp}/prefix/lib/powergrok/VERSION" || {
-    echo "  FAIL VERSION not stamped for rollback" >&2
+  grep -q 'state=rolled-back' "${tmp}/prefix/lib/powergrok/VERSION" || {
+    echo "  FAIL VERSION missing state=rolled-back" >&2
+    FAIL=$((FAIL + 1))
+  }
+  grep -q 'git=(unknown)' "${tmp}/prefix/lib/powergrok/VERSION" || {
+    echo "  FAIL VERSION missing git=(unknown)" >&2
     FAIL=$((FAIL + 1))
   }
   # official grok path not required; home still has auto_update false
@@ -450,10 +454,54 @@ test_freshness_is_advisory() {
     echo "  FAIL freshness output missing advisory language: ${out}" >&2
     FAIL=$((FAIL + 1))
   }
+  echo "${out}" | grep -q 'checkout_commits_behind_origin_powergrok\|checkout lag\|not installed binary' || {
+    echo "  FAIL freshness missing checkout labeling: ${out}" >&2
+    FAIL=$((FAIL + 1))
+  }
   # dry-run freshness must not remove install
   assert_file "install survives freshness dry-run" "${tmp}/prefix/lib/powergrok/powergrok"
   echo "  PASS freshness advisory"
   PASS=$((PASS + 1))
+  rm -rf "${tmp}"
+}
+
+test_official_grok_path_unchanged_across_lifecycle() {
+  echo "test_official_grok_path_unchanged_across_lifecycle"
+  local tmp fake1 fake2 fake_grok before after
+  tmp="$(mktemp -d)"
+  fake_grok="${tmp}/bin/grok"
+  mkdir -p "${tmp}/bin"
+  echo '#!/usr/bin/env bash
+echo official-grok
+exit 0' >"${fake_grok}"
+  chmod +x "${fake_grok}"
+  fake1="${tmp}/fake1"
+  fake2="${tmp}/fake2"
+  make_fake_artifact "${fake1}"
+  make_fake_artifact "${fake2}"
+  before="$(env PATH="${tmp}/bin:${PATH}" command -v grok)"
+  POWERGROK_INSTALL_ARTIFACT="${fake1}" \
+    env PATH="${tmp}/bin:${PATH}" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  POWERGROK_INSTALL_ARTIFACT="${fake2}" \
+    env PATH="${tmp}/bin:${PATH}" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  env PATH="${tmp}/bin:${PATH}" \
+    "${INSTALL}" --rollback --prefix "${tmp}/prefix" --grok-home "${tmp}/home" >/dev/null
+  after="$(env PATH="${tmp}/bin:${PATH}" command -v grok)"
+  if [[ "${before}" != "${after}" ]]; then
+    echo "  FAIL grok path changed ${before} -> ${after}" >&2
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS official grok path unchanged across upgrade+rollback"
+    PASS=$((PASS + 1))
+  fi
+  # fake official still works
+  out="$(env PATH="${tmp}/bin:${PATH}" grok 2>&1 || true)"
+  [[ "${out}" == *official-grok* ]] || {
+    echo "  FAIL official grok invocation broken: ${out}" >&2
+    FAIL=$((FAIL + 1))
+  }
   rm -rf "${tmp}"
 }
 
@@ -472,6 +520,7 @@ main() {
   test_upgrade_creates_prev_and_status
   test_rollback_restores_prev
   test_freshness_is_advisory
+  test_official_grok_path_unchanged_across_lifecycle
   echo
   echo "Results: ${PASS} passed, ${FAIL} failed"
   [[ "${FAIL}" -eq 0 ]]

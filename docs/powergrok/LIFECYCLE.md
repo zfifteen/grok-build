@@ -8,6 +8,8 @@
 
 Power Grok seeds **`[cli] auto_update = false`** so the official release channel cannot replace a source-built binary under `~/.powergrok`. Freshness is **operator-controlled**: pull trunk, re-run the installer, optional rollback from `powergrok.prev`.
 
+`powergrok.prev` is a **single slot**: each upgrade overwrites the previous backup (a third upgrade drops the oldest retained binary). Rollback may also write `powergrok.before-rollback` (forensics copy of the binary left behind) under the same lib dir.
+
 ## Happy path (upgrade)
 
 ```sh
@@ -58,12 +60,17 @@ After at least one upgrade that created `powergrok.prev`:
 ```sh
 ./scripts/install-powergrok.sh --rollback
 # restores lib binary from powergrok.prev
-# writes a rollback stamp to VERSION
+# writes VERSION with state=rolled-back and git=(unknown) (not a commit id)
+# may write powergrok.before-rollback (the binary that was replaced)
 # does not touch wrapper, GROK_HOME, or official grok
 # does not invoke cargo or official updater
 ```
 
 Then re-run a normal install when ready for a proper SHA stamp again.
+
+### Freshness labels
+
+`--status --check-freshness` reports **checkout** lag (`checkout_commits_behind_origin_powergrok` = repo HEAD vs `origin/powergrok`). That is **not** “installed binary vs origin.” Compare `installed_VERSION_git` separately. Fetch may update remote-tracking refs only; it never installs bits.
 
 ## Uninstall
 
@@ -80,8 +87,9 @@ Then re-run a normal install when ready for a proper SHA stamp again.
 |------|------|
 | `$prefix/bin/powergrok` | PATH wrapper |
 | `$prefix/lib/powergrok/powergrok` | real binary (argv0) |
-| `$prefix/lib/powergrok/powergrok.prev` | previous binary after upgrade |
-| `$prefix/lib/powergrok/VERSION` | git SHA, branch, built_at, features |
+| `$prefix/lib/powergrok/powergrok.prev` | previous binary after upgrade (single slot) |
+| `$prefix/lib/powergrok/powergrok.before-rollback` | optional forensics copy written by `--rollback` |
+| `$prefix/lib/powergrok/VERSION` | git SHA, branch, built_at, features (or `state=rolled-back`) |
 | `$GROK_HOME/config.toml` | seed: `auto_update = false` |
 
 Default prefix: `~/.local`. Default home: `~/.powergrok`.
