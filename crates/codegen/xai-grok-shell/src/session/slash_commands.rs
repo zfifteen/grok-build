@@ -65,7 +65,7 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "expert",
         description: "Set sticky Expert effort mode (N=4 analytic team for non-trivial work)",
-        argument_hint: Some("[--solo] optional task"),
+        argument_hint: Some("[--solo|--force-team] optional task"),
         aliases: &[],
         gate: BuiltinGate::EffortMode,
         resolve: |args| {
@@ -79,16 +79,16 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "heavy",
-        description: "Set sticky Heavy effort mode (N=16 analytic team + contrarian)",
-        argument_hint: Some("[--solo] optional task"),
+        description: "Set sticky Heavy effort mode (N=16). First team needs --confirm this session",
+        argument_hint: Some("[--solo|--force-team|--confirm] optional task"),
         aliases: &[],
         gate: BuiltinGate::EffortMode,
         resolve: |args| {
-            let (solo, task) = crate::session::effort_mode::parse_solo_and_task(args);
+            let flags = crate::session::effort_mode::parse_effort_turn_flags(args);
             BuiltinAction::SetEffortMode {
                 mode: crate::session::effort_mode::EffortMode::Heavy,
-                task,
-                solo,
+                task: flags.task,
+                solo: flags.solo,
             }
         },
     },
