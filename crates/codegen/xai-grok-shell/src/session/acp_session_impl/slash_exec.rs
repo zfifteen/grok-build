@@ -905,6 +905,21 @@ impl SessionActor {
                 self.send_slash_command_output("Goal cleared.").await;
                 ok_end_turn(0, None)
             }
+            BuiltinAction::BootstrapProject { args } => {
+                let cwd = if self.session_info.cwd.is_empty() {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                } else {
+                    std::path::PathBuf::from(&self.session_info.cwd)
+                };
+                // Prefer git worktree root when available so bootstrap is workspace-scoped.
+                let root = git2::Repository::discover(&cwd)
+                    .ok()
+                    .and_then(|r| r.workdir().map(|p| p.to_path_buf()))
+                    .unwrap_or(cwd);
+                let text = xai_grok_config::run_bootstrap_command(&root, &args);
+                self.send_slash_command_output(&text).await;
+                ok_end_turn(0, None)
+            }
         }
     }
 

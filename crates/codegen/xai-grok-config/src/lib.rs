@@ -20,6 +20,7 @@ mod loader;
 mod macos_managed;
 mod managed_cache;
 mod paths;
+pub mod project_bootstrap;
 pub mod shell;
 pub mod signed_policy;
 mod validation;
@@ -53,6 +54,11 @@ pub use paths::{
     project_config_dirname, sessions_cwd_dir, set_project_config_dirname_for_test,
     should_emit_empty_project_layer_warning, system_config_dir, take_empty_project_layer_warning,
     user_grok_home,
+};
+pub use project_bootstrap::{
+    assess_project_bootstrap, bootstrap_copy_all, bootstrap_copy_categories,
+    bootstrap_start_empty, format_bootstrap_status, run_bootstrap_command, BootstrapReport,
+    BootstrapStatus, BOOTSTRAP_CATEGORIES,
 };
 
 // Always compiled so call sites can use product_name() without feature-gated

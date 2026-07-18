@@ -105,6 +105,16 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         },
     },
     BuiltinCommand {
+        name: "bootstrap-project",
+        description: "Opt-in copy/create .powergrok/ from .grok/ (Power Grok project isolation)",
+        argument_hint: Some("[--preview|--copy-all|--copy a,b|--empty|--not-now] [--confirm]"),
+        aliases: &["bootstrap"],
+        gate: BuiltinGate::AlwaysOn,
+        resolve: |args| BuiltinAction::BootstrapProject {
+            args: args.to_string(),
+        },
+    },
+    BuiltinCommand {
         name: "always-approve",
         description: "Toggle always-approve mode (skip all permission prompts)",
         argument_hint: Some("on|off"),
@@ -714,6 +724,10 @@ pub(crate) enum BuiltinAction {
     GoalPause,
     GoalResume,
     GoalClear,
+    /// Opt-in project layer bootstrap (issue #7).
+    BootstrapProject {
+        args: String,
+    },
 }
 
 impl BuiltinAction {
@@ -758,6 +772,7 @@ impl BuiltinAction {
             | BuiltinAction::GoalPause
             | BuiltinAction::GoalResume
             | BuiltinAction::GoalClear => "goal",
+            BuiltinAction::BootstrapProject { .. } => "bootstrap-project",
         }
     }
 
@@ -791,6 +806,7 @@ impl BuiltinAction {
             | BuiltinAction::GoalPause
             | BuiltinAction::GoalResume
             | BuiltinAction::GoalClear => false,
+            BuiltinAction::BootstrapProject { args } => !args.is_empty(),
         }
     }
 }
