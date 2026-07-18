@@ -186,10 +186,11 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
     // .claude/skills/ paths. Equivalent locations should be opted in via
     // [paths] extra_skill_dirs in config.toml (written by /import-claude).
     let imported = crate::claude_import::is_claude_import_marked();
-    let local_dir_names: &[&str] = if imported {
-        &[".grok", ".agents"]
+    let product = xai_grok_config::project_config_dirname();
+    let local_dir_names: Vec<&str> = if imported {
+        vec![product, ".agents"]
     } else {
-        &[".grok", ".agents", ".claude"]
+        vec![product, ".agents", ".claude"]
     };
 
     let mut sources: Vec<(String, usize)> = Vec::new();
@@ -205,7 +206,7 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
     };
 
     let mut local_dirs: Vec<std::path::PathBuf> = Vec::new();
-    for dir_name in local_dir_names {
+    for dir_name in &local_dir_names {
         for subdir in &subdirs {
             let dir = cwd_path.join(dir_name).join(subdir);
             try_add_source(dir.clone(), None);
@@ -214,7 +215,7 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
     }
 
     if let Some(ref root) = git_root {
-        for dir_name in local_dir_names {
+        for dir_name in &local_dir_names {
             for subdir in &subdirs {
                 try_add_source(root.join(dir_name).join(subdir), Some(&local_dirs));
             }

@@ -14,12 +14,18 @@ use crate::config::{AgentDefinition, AgentScope, BuiltinAgentName};
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 
-/// Project-level agent directories to scan (`.grok/agents/` + `.claude/agents/` compat).
-const PROJECT_AGENT_SUBDIRS: &[&str] = &[".grok/agents", ".claude/agents"];
+/// Project-level agent dirs: active product `{dirname}/agents` + `.claude/agents`.
+fn project_agent_subdirs() -> [&'static str; 2] {
+    let product = match xai_grok_config::project_config_dirname() {
+        ".powergrok" => ".powergrok/agents",
+        _ => ".grok/agents",
+    };
+    [product, ".claude/agents"]
+}
 
-/// Existing project-level agent dirs (`.grok/agents` / `.claude/agents`), walked
-/// from `cwd` up to the git worktree root (inclusive). Returns
-/// `(existing dirs, git_root)`. Mirrors [`crate::plugins::project_plugin_dirs`].
+/// Existing project-level agent dirs, walked from `cwd` up to the git worktree
+/// root (inclusive). Returns `(existing dirs, git_root)`. Mirrors
+/// [`crate::plugins::project_plugin_dirs`].
 pub fn project_agent_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>) {
     let Some(cwd) = cwd else {
         return (Vec::new(), None);
@@ -28,15 +34,14 @@ pub fn project_agent_dirs(cwd: Option<&Path>) -> (Vec<PathBuf>, Option<PathBuf>)
     (project_agent_dirs_in(&chain.dirs), chain.git_root)
 }
 
-/// Existing project agent dirs (`.grok/agents` / `.claude/agents`) under each
-/// dir of a precomputed cwd→git-root chain ([`crate::repo::RepoDirChain`]).
+/// Existing project agent dirs under each dir of a precomputed cwd→git-root chain.
 ///
-/// Single source of the `PROJECT_AGENT_SUBDIRS` walk: the folder-trust detector
+/// Single source of the product+compat walk: the folder-trust detector
 /// (`repo_configs_present`) reuses its one shared chain here so detection can
-/// never drift from discovery (adding a third project-agent dir updates both at
-/// once).
+/// never drift from discovery.
 pub fn project_agent_dirs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
-    crate::repo::existing_subdirs_along(chain_dirs, PROJECT_AGENT_SUBDIRS)
+    let subdirs = project_agent_subdirs();
+    crate::repo::existing_subdirs_along(chain_dirs, &subdirs)
 }
 
 // ── Subagent entry types ─────────────────────────────────────────────

@@ -1,9 +1,13 @@
 //! Filesystem locations for grok config files and binaries.
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 static GROK_HOME: OnceLock<PathBuf> = OnceLock::new();
+static PROJECT_CONFIG_DIRNAME: OnceLock<&'static str> = OnceLock::new();
+
+/// Test-only override for [`project_config_dirname`]. Production never reads this.
+static PROJECT_CONFIG_DIRNAME_TEST_OVERRIDE: Mutex<Option<&'static str>> = Mutex::new(None);
 
 #[cfg(target_os = "macos")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str =
@@ -55,6 +59,93 @@ pub fn user_grok_home() -> Option<PathBuf> {
     #[allow(deprecated)]
     let resolvable = std::env::var_os("GROK_HOME").is_some() || std::env::home_dir().is_some();
     resolvable.then(grok_home)
+}
+
+/// Basename of the per-workspace project config directory (`.grok` or `.powergrok`).
+///
+/// Resolution (BUILD_PLAN §7.1 / issue #4):
+/// 1. Test override if set (unit tests only; never production).
+/// 2. Else argv0 basename `powergrok` / `powergrok.exe` → `.powergrok`.
+/// 3. Else → `.grok`.
+///
+/// Cached for process lifetime after the first non-override observation (mirrors
+/// [`grok_home`] OnceLock discipline). Fail-closed: powergrok never falls back
+/// to reading project `.grok/` (D7).
+pub fn project_config_dirname() -> &'static str {
+    if let Ok(guard) = PROJECT_CONFIG_DIRNAME_TEST_OVERRIDE.lock() {
+        if let Some(name) = *guard {
+            return name;
+        }
+    }
+    PROJECT_CONFIG_DIRNAME.get_or_init(resolve_project_config_dirname_from_argv0)
+}
+
+/// `<workspace_root>/<project_config_dirname()>`.
+pub fn project_config_dir(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(project_config_dirname())
+}
+
+/// True when this process uses the Power Grok project tree name (`.powergrok`).
+pub fn is_powergrok_project_tree() -> bool {
+    project_config_dirname() == ".powergrok"
+}
+
+/// G4 predicate (pure): powergrok process, workspace has `.grok/`, lacks `.powergrok/`.
+/// Independent of the one-shot latch so tests can assert conditions without
+/// process-order dependence.
+pub fn should_emit_empty_project_layer_warning(workspace_root: &Path) -> bool {
+    is_powergrok_project_tree()
+        && workspace_root.join(".grok").is_dir()
+        && !workspace_root.join(".powergrok").is_dir()
+}
+
+/// G4: one-shot empty project-layer warning when running as powergrok, the
+/// workspace has `.grok/` but no `.powergrok/`. Returns the message if it should
+/// be shown **now** (first call only for this process when conditions hold).
+///
+/// Callers choose the channel (stderr, toast, status). Never auto-copies.
+pub fn take_empty_project_layer_warning(workspace_root: &Path) -> Option<&'static str> {
+    static WARNED: OnceLock<()> = OnceLock::new();
+    if !should_emit_empty_project_layer_warning(workspace_root) {
+        return None;
+    }
+    if WARNED.set(()).is_err() {
+        return None;
+    }
+    Some(
+        "Project config for powergrok uses `.powergrok/` (isolated from `.grok/`). \
+         No `.powergrok/` found; project MCP/skills/hooks are empty until you create it \
+         (optional: `cp -R .grok .powergrok`).",
+    )
+}
+
+/// Set project config dirname for tests. Pass `None` to clear the override.
+///
+/// Does **not** clear the production OnceLock cache; prefer setting the override
+/// before the first production resolve in a test process, or only use override
+/// (override is checked first).
+pub fn set_project_config_dirname_for_test(name: Option<&'static str>) {
+    if let Ok(mut guard) = PROJECT_CONFIG_DIRNAME_TEST_OVERRIDE.lock() {
+        *guard = name;
+    }
+}
+
+fn resolve_project_config_dirname_from_argv0() -> &'static str {
+    let argv0 = std::env::args_os().next();
+    let Some(argv0) = argv0 else {
+        return ".grok";
+    };
+    let path = PathBuf::from(argv0);
+    let base = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if base == "powergrok" || base == "powergrok.exe" {
+        ".powergrok"
+    } else {
+        ".grok"
+    }
 }
 
 /// Canonical grok application path: `$GROK_HOME/bin/grok` (Unix) or `grok.exe` (Windows).
@@ -328,5 +419,77 @@ mod tests {
     #[test]
     fn slugify_truncates() {
         assert_eq!(slugify(&"a".repeat(100), 10).len(), 10);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn project_config_dirname_default_is_grok_for_test_binary() {
+        set_project_config_dirname_for_test(None);
+        // Test harness argv0 is not "powergrok" → official tree name.
+        assert_eq!(project_config_dirname(), ".grok");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn project_config_dirname_override_powergrok() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        assert_eq!(project_config_dirname(), ".powergrok");
+        assert!(is_powergrok_project_tree());
+        assert_eq!(
+            project_config_dir(Path::new("/ws")),
+            PathBuf::from("/ws/.powergrok")
+        );
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_project_layer_warning_under_powergrok_when_only_official_tree() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".grok")).unwrap();
+        assert!(
+            should_emit_empty_project_layer_warning(root),
+            "pure predicate must hold regardless of latch"
+        );
+        // One-shot take: first Some (if latch free) must match G4 copy.
+        if let Some(msg) = take_empty_project_layer_warning(root) {
+            assert!(msg.contains(".powergrok"), "{msg}");
+            assert!(msg.contains("cp -R .grok .powergrok"), "{msg}");
+            assert!(
+                take_empty_project_layer_warning(root).is_none(),
+                "G4 must fire at most once per process"
+            );
+        }
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_project_layer_no_warn_when_powergrok_dir_exists() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join(".grok")).unwrap();
+        std::fs::create_dir_all(root.join(".powergrok")).unwrap();
+        assert!(!should_emit_empty_project_layer_warning(root));
+        assert!(take_empty_project_layer_warning(root).is_none());
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_project_layer_no_warn_under_official_tree() {
+        set_project_config_dirname_for_test(Some(".grok"));
+        assert!(
+            !is_powergrok_project_tree(),
+            "override must force official tree name"
+        );
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        assert!(!should_emit_empty_project_layer_warning(tmp.path()));
+        assert!(take_empty_project_layer_warning(tmp.path()).is_none());
+        set_project_config_dirname_for_test(None);
     }
 }

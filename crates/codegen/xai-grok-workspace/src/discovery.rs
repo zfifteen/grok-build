@@ -163,7 +163,7 @@ pub fn discover_plugins(
 /// Returns `Value::Null` if the file does not exist or cannot be
 /// parsed. Non-fatal errors are logged.
 pub fn load_project_config(root_cwd: &Path) -> Value {
-    let config_path = root_cwd.join(".grok").join("config.toml");
+    let config_path = root_cwd.join(xai_grok_config::project_config_dirname()).join("config.toml");
     match xai_grok_config::load_config_file(&config_path) {
         Ok(toml::Value::Table(ref t)) if t.is_empty() => {
             // The config loader returns an empty table when the file

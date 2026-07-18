@@ -74,7 +74,7 @@ impl CheckpointStore {
         // `session_id` is RPC-controlled: never join it verbatim (a `../../etc`
         // would escape the store root). Map it to a safe, collision-free name first.
         let dir = cwd
-            .join(".grok")
+            .join(xai_grok_config::project_config_dirname())
             .join(STORE_SUBDIR)
             .join(session_store_dir_name(session_id));
         let cap = cap.max(1);
@@ -486,7 +486,7 @@ mod tests {
         // ...and a `.gitignore` ignores the whole store so blobs are never committed.
         let gitignore = tmp
             .path()
-            .join(".grok")
+            .join(xai_grok_config::project_config_dirname())
             .join(STORE_SUBDIR)
             .join(".gitignore");
         let body = std::fs::read_to_string(&gitignore).expect("gitignore written");

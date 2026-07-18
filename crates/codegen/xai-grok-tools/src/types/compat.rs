@@ -358,14 +358,15 @@ impl CompatConfig {
     }
 
     /// Config directories that may contain `skills/` subdirectories, in
-    /// priority order. `.grok` and `.agents` are always included; `.claude`
-    /// and `.cursor` are gated on their respective `skills` cell.
+    /// priority order. The **active product** basename from
+    /// [`xai_grok_config::project_config_dirname`] (`.grok` or `.powergrok`,
+    /// never both — D7) and `.agents` are always included; `.claude` and
+    /// `.cursor` are gated on their respective `skills` cell.
     ///
-    /// Replaces the hard-coded `[".grok", ".agents", ".claude", ".cursor"]`
-    /// in `collect_skill_config_dirs`. When all cells are on, the returned
-    /// list is identical to the historical constant.
+    /// When product dirname is `.grok` and all vendor cells are on, the list
+    /// matches the historical `[".grok", ".agents", ".claude", ".cursor"]`.
     pub fn skill_config_dirs(&self) -> Vec<&'static str> {
-        let mut dirs = vec![".grok", ".agents"];
+        let mut dirs = vec![xai_grok_config::project_config_dirname(), ".agents"];
         if self.claude.skills {
             dirs.push(".claude");
         }
@@ -375,14 +376,15 @@ impl CompatConfig {
         dirs
     }
 
-    /// Subdirectories scanned for `*.md` rules files. `.grok/rules` is always
-    /// included; `.claude/rules` and `.cursor/rules` are gated on their
-    /// respective `rules` cell.
-    ///
-    /// Replaces the hard-coded `RULES_DIRS` constant. When all cells are on,
-    /// the returned list is identical.
+    /// Subdirectories scanned for `*.md` rules files. Active product
+    /// `{dirname}/rules` is always included; `.claude/rules` and
+    /// `.cursor/rules` are gated on their respective `rules` cell.
     pub fn rules_dirs(&self) -> Vec<&'static str> {
-        let mut dirs = vec![".grok/rules"];
+        let product_rules = match xai_grok_config::project_config_dirname() {
+            ".powergrok" => ".powergrok/rules",
+            _ => ".grok/rules",
+        };
+        let mut dirs = vec![product_rules];
         if self.claude.rules {
             dirs.push(".claude/rules");
         }

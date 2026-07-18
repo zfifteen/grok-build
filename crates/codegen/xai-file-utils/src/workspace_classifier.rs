@@ -1,8 +1,18 @@
 use std::path::{Path, PathBuf};
 
 const EXCLUDED_DIR_NAMES: &[&str] = &[
-    ".grok", ".cache", ".daemon", ".config", ".npm", ".cargo", ".rustup", ".vscode", ".gemini",
-    ".hermes", ".claude",
+    ".grok",
+    ".powergrok",
+    ".cache",
+    ".daemon",
+    ".config",
+    ".npm",
+    ".cargo",
+    ".rustup",
+    ".vscode",
+    ".gemini",
+    ".hermes",
+    ".claude",
 ];
 
 fn known_os_dirs() -> Vec<PathBuf> {
@@ -155,7 +165,7 @@ fn has_excluded_component(path: &Path) -> bool {
                 return true;
             }
 
-            if name_lower.starts_with(".grok-") {
+            if name_lower.starts_with(".grok-") || name_lower.starts_with(".powergrok-") {
                 return true;
             }
         }
@@ -256,6 +266,8 @@ mod tests {
             if let Some(home) = dirs::home_dir() {
                 assert!(!is_project_dir(&home.join(".grok")));
                 assert!(!is_project_dir(&home.join(".grok/bin")));
+                assert!(!is_project_dir(&home.join(".powergrok")));
+                assert!(!is_project_dir(&home.join(".powergrok/bin")));
             }
         }
 
@@ -263,6 +275,7 @@ mod tests {
         fn grok_prefixed_dirs_are_unsafe() {
             if let Some(home) = dirs::home_dir() {
                 assert!(!is_project_dir(&home.join(".grok-proxy-work")));
+                assert!(!is_project_dir(&home.join(".powergrok-proxy-work")));
             }
         }
 
