@@ -302,7 +302,7 @@ Details: [`AGENTS.md`](AGENTS.md).
 | Knob | Purpose |
 |------|---------|
 | `GROK_HOME` | Defaults to `~/.powergrok` via wrapper |
-| `POWERGROK_BRANDING=1` | Branding override (wrapper sets this) |
+| `POWERGROK_BRANDING=1` | Optional branding override for **non-feature** builds/tests only; product builds use `--features powergrok` (always-on). The install wrapper does **not** export this. |
 | `GROK_EFFORT_BRAIN_SEED` | Deterministic Expert brain draw (tests / repro) |
 
 ### Contributing

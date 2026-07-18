@@ -34,6 +34,7 @@ ARTIFACT=""
 WRAPPER_SRC=""
 VERSION_PATH=""
 PREV_BIN_PATH=""
+OFFICIAL_HOME=""
 
 usage() {
   cat <<'EOF'
@@ -44,8 +45,8 @@ One-command Power Grok install (side-by-side with official grok).
 Options:
   --build                 Build release artifact before install (default)
   --no-build              Skip cargo build; require existing target/release/xai-grok-pager
-  --prefix DIR            Install prefix (default: $HOME/.local)
-  --grok-home DIR         Power Grok user home / GROK_HOME (default: $HOME/.powergrok)
+  --prefix DIR            Install prefix (default: $HOME/.local); normalized to absolute
+  --grok-home DIR         Power Grok user home / GROK_HOME (default: $HOME/.powergrok); absolute
   --dry-run               Print actions; do not write or build
   --uninstall             Remove wrapper + lib/powergrok (not repo project data)
   --purge-home            With --uninstall, also remove --grok-home directory
@@ -84,6 +85,34 @@ run_or_dry() {
     return 0
   fi
   "$@"
+}
+
+# Absolute, normalized path (does not require the path to exist).
+canonical_path() {
+  local input="$1"
+  python3 -c 'import os,sys; print(os.path.normpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))' "${input}"
+}
+
+escape_double_quotes() {
+  # Escape \ and " for inclusion inside double-quoted shell assignments.
+  python3 -c 'import sys; s=sys.argv[1]; print(s.replace("\\", "\\\\").replace("\"", "\\\""))' "$1"
+}
+
+is_official_home_path() {
+  # True if path canonically equals $HOME/.grok (even if neither exists yet).
+  local candidate="$1"
+  local official_c candidate_c
+  official_c="$(canonical_path "${HOME}/.grok")"
+  candidate_c="$(canonical_path "${candidate}")"
+  [[ "${candidate_c}" == "${official_c}" ]]
+}
+
+assert_safe_install_path() {
+  local label="$1" path="$2"
+  [[ -n "${path}" ]] || die "${label} is empty"
+  [[ "${path}" != "/" ]] || die "${label} must not be filesystem root"
+  # Refuse bare relative leftovers (canonical_path should already absolute them).
+  [[ "${path}" == /* ]] || die "${label} must be absolute after normalization (got: ${path})"
 }
 
 resolve_repo_root() {
@@ -162,9 +191,14 @@ parse_args() {
 }
 
 derive_paths() {
-  # Expand leading ~ if user passed it literally.
-  PREFIX="${PREFIX/#\~/${HOME}}"
-  GROK_HOME_OPT="${GROK_HOME_OPT/#\~/${HOME}}"
+  # Expand ~ and force absolute/normalized paths so baked wrapper defaults
+  # do not depend on the caller's cwd (Codex + Hermes review).
+  PREFIX="$(canonical_path "${PREFIX}")"
+  GROK_HOME_OPT="$(canonical_path "${GROK_HOME_OPT}")"
+  OFFICIAL_HOME="$(canonical_path "${HOME}/.grok")"
+
+  assert_safe_install_path "--prefix" "${PREFIX}"
+  assert_safe_install_path "--grok-home" "${GROK_HOME_OPT}"
 
   BIN_DIR="${PREFIX}/bin"
   LIB_DIR="${PREFIX}/lib/powergrok"
@@ -172,7 +206,12 @@ derive_paths() {
   REAL_BIN_PATH="${LIB_DIR}/${PUBLIC_COMMAND_NAME}"
   VERSION_PATH="${LIB_DIR}/VERSION"
   PREV_BIN_PATH="${LIB_DIR}/powergrok.prev"
-  ARTIFACT="${REPO_ROOT}/${ARTIFACT_REL}"
+  # Test override: POWERGROK_INSTALL_ARTIFACT=/abs/path/to/fake-bin
+  if [[ -n "${POWERGROK_INSTALL_ARTIFACT:-}" ]]; then
+    ARTIFACT="$(canonical_path "${POWERGROK_INSTALL_ARTIFACT}")"
+  else
+    ARTIFACT="${REPO_ROOT}/${ARTIFACT_REL}"
+  fi
   WRAPPER_SRC="${REPO_ROOT}/${WRAPPER_SOURCE_REL}"
 }
 
@@ -199,7 +238,6 @@ _paths_collide() {
     [[ "$(realpath "${a}")" == "$(realpath "${b}")" ]]
     return
   fi
-  # Fallback: device+inode
   local ia ib
   ia="$(ls -di "${a}" | awk '{print $1}')"
   ib="$(ls -di "${b}" | awk '{print $1}')"
@@ -209,19 +247,27 @@ _paths_collide() {
 assert_does_not_clobber_official_grok() {
   local grok_path
   grok_path="$(command -v grok 2>/dev/null || true)"
-  if [[ -z "${grok_path}" ]]; then
+  if [[ -n "${grok_path}" ]]; then
+    if _paths_collide "${WRAPPER_PATH}" "${grok_path}"; then
+      die "install would overwrite official grok at ${grok_path}"
+    fi
+    if _paths_collide "${REAL_BIN_PATH}" "${grok_path}"; then
+      die "real binary path collides with official grok at ${grok_path}"
+    fi
+    if [[ "$(basename "${grok_path}")" == "${FORBIDDEN_PUBLIC_NAME}" \
+       && "${WRAPPER_PATH}" == "${grok_path}" ]]; then
+      die "refusing to replace official grok PATH entry"
+    fi
+  fi
+}
+
+assert_grok_home_is_not_official() {
+  if [[ "${POWERGROK_ALLOW_OFFICIAL_HOME:-}" == "1" ]]; then
+    log "warning: POWERGROK_ALLOW_OFFICIAL_HOME=1 — allowing official home path"
     return 0
   fi
-  if _paths_collide "${WRAPPER_PATH}" "${grok_path}"; then
-    die "install would overwrite official grok at ${grok_path}"
-  fi
-  if _paths_collide "${REAL_BIN_PATH}" "${grok_path}"; then
-    die "real binary path collides with official grok at ${grok_path}"
-  fi
-  # Also refuse if wrapper target name is literally the grok path basename wrongly.
-  if [[ "$(basename "${grok_path}")" == "${FORBIDDEN_PUBLIC_NAME}" \
-     && "${WRAPPER_PATH}" == "${grok_path}" ]]; then
-    die "refusing to replace official grok PATH entry"
+  if is_official_home_path "${GROK_HOME_OPT}"; then
+    die "--grok-home resolves to official ~/.grok (${GROK_HOME_OPT}); refuse (set POWERGROK_ALLOW_OFFICIAL_HOME=1 only if intentional)"
   fi
 }
 
@@ -233,6 +279,10 @@ require_rust_toolchain() {
 build_release_artifact() {
   if [[ "${DO_BUILD}" -ne 1 ]]; then
     log "skipping build (--no-build)"
+    return 0
+  fi
+  if [[ -n "${POWERGROK_INSTALL_ARTIFACT:-}" ]]; then
+    log "skipping build (POWERGROK_INSTALL_ARTIFACT override)"
     return 0
   fi
   require_rust_toolchain
@@ -248,7 +298,7 @@ build_release_artifact() {
 }
 
 assert_artifact_present() {
-  if [[ "${DRY_RUN}" -eq 1 && "${DO_BUILD}" -eq 1 ]]; then
+  if [[ "${DRY_RUN}" -eq 1 && "${DO_BUILD}" -eq 1 && -z "${POWERGROK_INSTALL_ARTIFACT:-}" ]]; then
     log "skipping artifact check in dry-run with build (artifact would be produced)"
     return 0
   fi
@@ -256,7 +306,6 @@ assert_artifact_present() {
     die "missing artifact ${ARTIFACT}; run without --no-build or build first"
   fi
   if [[ ! -x "${ARTIFACT}" ]]; then
-    # cargo artifacts are usually +x; still accept non-x and chmod on install
     log "warning: artifact exists but is not executable yet: ${ARTIFACT}"
   fi
 }
@@ -280,6 +329,15 @@ install_real_binary() {
   fi
 }
 
+# Run the real binary under Power Grok home so the engine never touches ~/.grok.
+run_installed_binary_isolated() {
+  env -u POWERGROK_HOME \
+    GROK_HOME="${GROK_HOME_OPT}" \
+    HOME="${HOME}" \
+    PATH="${PATH}" \
+    "${REAL_BIN_PATH}" "$@"
+}
+
 write_version_file() {
   log "write VERSION → ${VERSION_PATH}"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
@@ -292,7 +350,8 @@ write_version_file() {
   built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   version_line=""
   if [[ -x "${REAL_BIN_PATH}" ]]; then
-    version_line="$("${REAL_BIN_PATH}" --version 2>/dev/null | head -n 1 || true)"
+    # Critical: always set GROK_HOME so --version cannot initialize ~/.grok.
+    version_line="$(run_installed_binary_isolated --version 2>/dev/null | head -n 1 || true)"
   fi
   {
     echo "git=${git_sha}"
@@ -316,10 +375,13 @@ install_wrapper() {
   fi
 
   mkdir -p "${BIN_DIR}"
-  # Copy repo wrapper; rewrite the two default assignments between markers.
-  local tmp
+  local tmp lib_esc home_esc
   tmp="$(mktemp)"
-  awk -v lib="${LIB_DIR}" -v home="${GROK_HOME_OPT}" '
+  lib_esc="$(escape_double_quotes "${LIB_DIR}")"
+  home_esc="$(escape_double_quotes "${GROK_HOME_OPT}")"
+
+  # Bake absolute defaults; quote-escape paths so awk -v cannot break on ".
+  awk -v lib="${lib_esc}" -v home="${home_esc}" '
     BEGIN { in_block = 0 }
     /# BEGIN_POWERGROK_INSTALL_DEFAULTS/ {
       print
@@ -342,11 +404,13 @@ install_wrapper() {
     rm -f "${tmp}"
     die "wrapper source missing uninstall marker '${WRAPPER_MARKER}'"
   fi
-  if ! grep -q "POWERGROK_LIB_DEFAULT=\"${LIB_DIR}\"" "${tmp}"; then
+  if ! grep -Fq "POWERGROK_LIB_DEFAULT=\"${LIB_DIR}\"" "${tmp}" \
+    && ! grep -Fq "POWERGROK_LIB_DEFAULT=\"${lib_esc}\"" "${tmp}"; then
     rm -f "${tmp}"
     die "wrapper lib default bake failed"
   fi
-  if ! grep -q "POWERGROK_HOME_DEFAULT=\"${GROK_HOME_OPT}\"" "${tmp}"; then
+  if ! grep -Fq "POWERGROK_HOME_DEFAULT=\"${GROK_HOME_OPT}\"" "${tmp}" \
+    && ! grep -Fq "POWERGROK_HOME_DEFAULT=\"${home_esc}\"" "${tmp}"; then
     rm -f "${tmp}"
     die "wrapper home default bake failed"
   fi
@@ -391,8 +455,8 @@ install_completions_best_effort() {
 
   log "generate completions under ${GROK_HOME_OPT}/completions (best-effort)"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    log "would run: ${REAL_BIN_PATH} completions bash > ${bash_out}"
-    log "would run: ${REAL_BIN_PATH} completions zsh > ${zsh_out}"
+    log "would run: GROK_HOME=${GROK_HOME_OPT} ${REAL_BIN_PATH} completions bash > ${bash_out}"
+    log "would run: GROK_HOME=${GROK_HOME_OPT} ${REAL_BIN_PATH} completions zsh > ${zsh_out}"
     return 0
   fi
 
@@ -402,13 +466,14 @@ install_completions_best_effort() {
   fi
 
   mkdir -p "${bash_dir}" "${zsh_dir}"
-  if "${REAL_BIN_PATH}" completions bash >"${bash_out}" 2>/dev/null; then
+  # Critical: always set GROK_HOME so completions cannot initialize ~/.grok.
+  if run_installed_binary_isolated completions bash >"${bash_out}" 2>/dev/null; then
     log "wrote ${bash_out}"
   else
     log "warning: completions bash failed (ignored)"
     rm -f "${bash_out}"
   fi
-  if "${REAL_BIN_PATH}" completions zsh >"${zsh_out}" 2>/dev/null; then
+  if run_installed_binary_isolated completions zsh >"${zsh_out}" 2>/dev/null; then
     log "wrote ${zsh_out}"
   else
     log "warning: completions zsh failed (ignored)"
@@ -435,6 +500,8 @@ Smoke (also V1–V6, V9, V11):
   test "\$(command -v grok 2>/dev/null || true)" != "\$(command -v powergrok)"
   # argv0: real binary basename
   basename "${REAL_BIN_PATH}"   # expect: powergrok
+  # install must not touch official home (when present):
+  #   ls -ld ~/.grok  # mtime should be unchanged by install
 
 EOF
   case ":${PATH}:" in
@@ -457,6 +524,9 @@ EOF
 
 uninstall_powergrok() {
   derive_paths
+  assert_safe_install_path "--prefix" "${PREFIX}"
+  assert_safe_install_path "--grok-home" "${GROK_HOME_OPT}"
+
   log "uninstall wrapper=${WRAPPER_PATH} lib=${LIB_DIR}"
 
   if [[ -e "${WRAPPER_PATH}" ]]; then
@@ -471,6 +541,10 @@ uninstall_powergrok() {
   fi
 
   if [[ -d "${LIB_DIR}" ]]; then
+    # Extra safety: never rm -rf something that isn't .../lib/powergrok
+    if [[ "$(basename "${LIB_DIR}")" != "powergrok" ]]; then
+      die "refusing to remove unexpected lib dir: ${LIB_DIR}"
+    fi
     run_or_dry rm -rf "${LIB_DIR}"
     log "removed ${LIB_DIR}"
   else
@@ -479,8 +553,14 @@ uninstall_powergrok() {
 
   if [[ "${PURGE_HOME}" -eq 1 ]]; then
     log "purge home ${GROK_HOME_OPT}"
-    if [[ "${GROK_HOME_OPT}" == "${HOME}/.grok" ]]; then
-      die "refusing to purge official ~/.grok"
+    if is_official_home_path "${GROK_HOME_OPT}"; then
+      die "refusing to purge official ~/.grok (path=${GROK_HOME_OPT})"
+    fi
+    # Also refuse if path is a symlink resolving to official home.
+    if [[ -e "${GROK_HOME_OPT}" ]] && command -v realpath >/dev/null 2>&1; then
+      if [[ "$(realpath "${GROK_HOME_OPT}")" == "$(realpath "${HOME}/.grok" 2>/dev/null || true)" ]]; then
+        die "refusing to purge path that realpath-equals official ~/.grok"
+      fi
     fi
     if [[ -d "${GROK_HOME_OPT}" ]]; then
       run_or_dry rm -rf "${GROK_HOME_OPT}"
@@ -497,6 +577,7 @@ do_install() {
   derive_paths
   assert_public_name_is_powergrok
   assert_does_not_clobber_official_grok
+  assert_grok_home_is_not_official
 
   log "repo=${REPO_ROOT}"
   log "prefix=${PREFIX} grok-home=${GROK_HOME_OPT}"
@@ -504,9 +585,10 @@ do_install() {
   build_release_artifact
   assert_artifact_present
   install_real_binary
+  # Seed home before any binary invocation so GROK_HOME dir exists for engine.
+  seed_config_if_missing
   write_version_file
   install_wrapper
-  seed_config_if_missing
   install_completions_best_effort
   print_verify_block
 }
@@ -514,8 +596,8 @@ do_install() {
 main() {
   parse_args "$@"
   if [[ "${UNINSTALL}" -eq 1 ]]; then
-    # Paths come from --prefix / --grok-home; repo root not required.
-    REPO_ROOT="${REPO_ROOT:-$(pwd)}"
+    # Paths come from --prefix / --grok-home; full repo root not required.
+    REPO_ROOT="$(pwd)"
     uninstall_powergrok
   else
     do_install
