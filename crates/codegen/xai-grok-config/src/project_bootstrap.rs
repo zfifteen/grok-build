@@ -188,7 +188,10 @@ pub fn format_bootstrap_status(status: &BootstrapStatus) -> String {
     lines.join("\n")
 }
 
-/// Create an empty `.powergrok/` (or leave existing). Requires `confirm`.
+/// Create an empty `.powergrok/` if it does not already exist. Requires `confirm`.
+///
+/// Refuses if `.powergrok/` already exists (even empty) so this cannot be used
+/// to paper over a partial failed selective copy or merge into an existing tree.
 pub fn bootstrap_start_empty(workspace_root: &Path, confirm: bool) -> io::Result<BootstrapReport> {
     require_powergrok_process()?;
     if !confirm {
@@ -198,18 +201,22 @@ pub fn bootstrap_start_empty(workspace_root: &Path, confirm: bool) -> io::Result
         ));
     }
     let dest = workspace_root.join(".powergrok");
+    if dest.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            ".powergrok/ already exists; refuse to overwrite or merge (use status/preview)",
+        ));
+    }
     fs::create_dir_all(&dest)?;
     // Minimal marker so operators see an intentional empty layer.
     let readme = dest.join("README.powergrok-bootstrap.md");
-    if !readme.exists() {
-        fs::write(
-            &readme,
-            "# Power Grok project layer\n\n\
-             Created empty via `/bootstrap-project --empty --confirm`.\n\
-             Power Grok reads only this directory (not `.grok/`).\n\
-             See docs/powergrok/BUILD_PLAN.md §7.2–§7.3.\n",
-        )?;
-    }
+    fs::write(
+        &readme,
+        "# Power Grok project layer\n\n\
+         Created empty via `/bootstrap-project --empty --confirm`.\n\
+         Power Grok reads only this directory (not `.grok/`).\n\
+         See docs/powergrok/BUILD_PLAN.md §7.2–§7.3.\n",
+    )?;
     Ok(BootstrapReport {
         action: "empty".into(),
         destination: dest,
@@ -222,8 +229,9 @@ pub fn bootstrap_start_empty(workspace_root: &Path, confirm: bool) -> io::Result
     })
 }
 
-/// Full tree copy `.grok` → `.powergrok` (informed cp -R). Requires `confirm`.
-/// Fails if destination already exists and is non-empty.
+/// Full tree copy `.grok` → `.powergrok` (informed cp -R of regular files/dirs).
+/// Requires `confirm`. Fails if destination already exists (empty or not).
+/// Symlinks under `.grok/` are **skipped** (fail-closed; never followed out-of-tree).
 pub fn bootstrap_copy_all(workspace_root: &Path, confirm: bool) -> io::Result<BootstrapReport> {
     require_powergrok_process()?;
     if !confirm {
@@ -246,22 +254,34 @@ pub fn bootstrap_copy_all(workspace_root: &Path, confirm: bool) -> io::Result<Bo
             ".powergrok/ already exists; refuse to overwrite (D7 — no merge)",
         ));
     }
-    copy_dir_recursive(&src, &dest)?;
+    let mut skipped_links = Vec::new();
+    copy_dir_recursive(&src, &dest, &src, &mut skipped_links)?;
     let cats = inventory_categories(&src);
+    let mut notes = vec![
+        "Full copy complete. Power Grok still does not read project .grok/ at runtime.".into(),
+        "gitignore tip (manual): echo .powergrok/ >> .gitignore  # if personal-only".into(),
+    ];
+    if !skipped_links.is_empty() {
+        notes.push(format!(
+            "skipped {} symlink(s) (not followed): {}",
+            skipped_links.len(),
+            skipped_links.join(", ")
+        ));
+    }
     Ok(BootstrapReport {
         action: "copy-all".into(),
         destination: dest,
         copied: cats,
-        skipped: vec![],
-        notes: vec![
-            "Full copy complete. Power Grok still does not read project .grok/ at runtime.".into(),
-            "gitignore tip (manual): echo .powergrok/ >> .gitignore  # if personal-only".into(),
-        ],
+        skipped: skipped_links,
+        notes,
     })
 }
 
 /// Selective copy of named categories from `.grok` into `.powergrok`.
 /// Unknown names are skipped with notes. Requires `confirm`.
+///
+/// Does **not** leave an empty `.powergrok/` if nothing was copied (avoids
+/// suppressing G4 and blocking a later `--copy-all`).
 pub fn bootstrap_copy_categories(
     workspace_root: &Path,
     categories: &[&str],
@@ -288,28 +308,47 @@ pub fn bootstrap_copy_categories(
             "no .grok/ directory to copy from",
         ));
     }
-    fs::create_dir_all(&dest_root)?;
 
     let mut copied = Vec::new();
     let mut skipped = Vec::new();
     let mut notes = Vec::new();
+    let mut pending: Vec<(String, PathBuf, PathBuf)> = Vec::new();
 
     for raw in categories {
         let name = raw.trim();
-        if name.is_empty() {
+        if name.is_empty() || name == "." {
+            skipped.push(name.to_string());
+            notes.push("skipped empty or '.' category name".into());
             continue;
         }
-        // Refuse path escape.
-        if name.contains("..") || name.contains('/') || name.contains('\\') {
+        // Refuse path escape / absolute-looking names.
+        if name.contains("..")
+            || name.contains('/')
+            || name.contains('\\')
+            || name.starts_with('~')
+            || Path::new(name).is_absolute()
+        {
             skipped.push(name.to_string());
             notes.push(format!("skipped unsafe name: {name}"));
             continue;
         }
         let src = src_root.join(name);
         let dest = dest_root.join(name);
-        if !src.exists() {
+        // Use symlink_metadata so a dangling or out-of-tree symlink is not
+        // treated as a normal file/dir via follow.
+        let meta = match fs::symlink_metadata(&src) {
+            Ok(m) => m,
+            Err(_) => {
+                skipped.push(name.to_string());
+                notes.push(format!("not found under .grok/: {name}"));
+                continue;
+            }
+        };
+        if meta.file_type().is_symlink() {
             skipped.push(name.to_string());
-            notes.push(format!("not found under .grok/: {name}"));
+            notes.push(format!(
+                "skipped symlink category (not followed): {name}"
+            ));
             continue;
         }
         if dest.exists() {
@@ -317,24 +356,69 @@ pub fn bootstrap_copy_categories(
             notes.push(format!("destination exists, left untouched: {name}"));
             continue;
         }
-        if src.is_dir() {
-            copy_dir_recursive(&src, &dest)?;
+        pending.push((name.to_string(), src, dest));
+    }
+
+    if pending.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "nothing to copy (all categories missing, unsafe, or symlink); \
+                 .powergrok/ was not created. skipped: {}",
+                skipped.join(", ")
+            ),
+        ));
+    }
+
+    let dest_existed = dest_root.exists();
+    fs::create_dir_all(&dest_root)?;
+
+    let mut skipped_links = Vec::new();
+    for (name, src, dest) in pending {
+        let result = if src.is_dir() {
+            copy_dir_recursive(&src, &dest, &src_root, &mut skipped_links)
         } else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&src, &dest)?;
+            fs::copy(&src, &dest).map(|_| ())
+        };
+        match result {
+            Ok(()) => copied.push(name),
+            Err(e) => {
+                skipped.push(name.clone());
+                notes.push(format!("failed to copy {name}: {e}"));
+            }
         }
-        copied.push(name.to_string());
+    }
+
+    if copied.is_empty() {
+        // Roll back empty dest we created so G4 / copy-all stay available.
+        if !dest_existed {
+            let _ = remove_dir_if_empty(&dest_root);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "no categories copied; .powergrok/ not left empty. skipped: {}",
+                skipped.join(", ")
+            ),
+        ));
     }
 
     notes.push(
         "Selective copy complete. Power Grok still does not read project .grok/ at runtime."
             .into(),
     );
-    notes.push(
-        "gitignore tip (manual): echo .powergrok/ >> .gitignore  # if personal-only".into(),
-    );
+    notes.push("gitignore tip (manual): echo .powergrok/ >> .gitignore  # if personal-only".into());
+    if !skipped_links.is_empty() {
+        notes.push(format!(
+            "skipped {} nested symlink(s) (not followed): {}",
+            skipped_links.len(),
+            skipped_links.join(", ")
+        ));
+        skipped.extend(skipped_links);
+    }
 
     Ok(BootstrapReport {
         action: "copy-selective".into(),
@@ -352,14 +436,19 @@ pub fn run_bootstrap_command(workspace_root: &Path, args: &str) -> String {
     let tokens = split_args(args);
     let status = assess_project_bootstrap(workspace_root);
 
-    if tokens.is_empty() || tokens.iter().any(|t| t == "status" || t == "help" || t == "-h" || t == "--help") {
+    if tokens.is_empty()
+        || tokens
+            .iter()
+            .any(|t| t == "status" || t == "help" || t == "-h" || t == "--help")
+    {
         return format_bootstrap_status(&status);
     }
 
     if tokens.iter().any(|t| t == "--not-now" || t == "not-now") {
-        return "Bootstrap dismissed for now. Project tools stay empty until you create `.powergrok/` \
+        return "Acknowledged for this reply only (no persistent suppress; next session may show G4 again). \
+                Project tools stay empty until you create `.powergrok/` \
                 (`/bootstrap-project --copy-all --confirm` or `--empty --confirm`). \
-                G4 does not re-nag every keystroke."
+                G4 does not re-nag every keystroke in this process."
             .to_string();
     }
 
@@ -386,7 +475,11 @@ pub fn run_bootstrap_command(workspace_root: &Path, args: &str) -> String {
     // --copy a,b,c
     if let Some(idx) = tokens.iter().position(|t| t == "--copy") {
         let list = tokens.get(idx + 1).map(String::as_str).unwrap_or("");
-        let cats: Vec<&str> = list.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+        let cats: Vec<&str> = list
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
         return match bootstrap_copy_categories(workspace_root, &cats, confirm) {
             Ok(r) => format_report(&r),
             Err(e) => format!("bootstrap-project: {e}"),
@@ -430,25 +523,47 @@ fn split_args(args: &str) -> Vec<String> {
     args.split_whitespace().map(|s| s.to_string()).collect()
 }
 
-fn copy_dir_recursive(src: &Path, dest: &Path) -> io::Result<()> {
+fn remove_dir_if_empty(path: &Path) -> io::Result<()> {
+    match fs::read_dir(path) {
+        Ok(mut rd) => {
+            if rd.next().is_none() {
+                fs::remove_dir(path)?;
+            }
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Copy regular files and directories only. Symlinks are recorded in
+/// `skipped_symlinks` and never followed (prevents out-of-tree import / cycles).
+fn copy_dir_recursive(
+    src: &Path,
+    dest: &Path,
+    tree_root: &Path,
+    skipped_symlinks: &mut Vec<String>,
+) -> io::Result<()> {
     fs::create_dir_all(dest)?;
     for ent in fs::read_dir(src)? {
         let ent = ent?;
-        let ty = ent.file_type()?;
         let from = ent.path();
         let to = dest.join(ent.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else if ty.is_file() {
-            fs::copy(&from, &to)?;
-        } else if ty.is_symlink() {
-            // Copy symlink target contents as file/dir if possible; skip broken.
-            if from.is_dir() {
-                copy_dir_recursive(&from, &to)?;
-            } else if from.is_file() {
-                fs::copy(&from, &to)?;
-            }
+        let meta = fs::symlink_metadata(&from)?;
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            let rel = from
+                .strip_prefix(tree_root)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| from.display().to_string());
+            skipped_symlinks.push(rel);
+            continue;
         }
+        if ft.is_dir() {
+            copy_dir_recursive(&from, &to, tree_root, skipped_symlinks)?;
+        } else if ft.is_file() {
+            fs::copy(&from, &to)?;
+        }
+        // other special files: skip
     }
     Ok(())
 }
@@ -546,9 +661,9 @@ mod tests {
         set_project_config_dirname_for_test(Some(".powergrok"));
         let tmp = TempDir::new().unwrap();
         fs::create_dir_all(tmp.path().join(".grok")).unwrap();
-        let report = bootstrap_copy_categories(tmp.path(), &["../etc"], true).unwrap();
-        assert!(report.copied.is_empty());
-        assert!(report.skipped.iter().any(|s| s.contains("..")));
+        let err = bootstrap_copy_categories(tmp.path(), &["../etc"], true).unwrap_err();
+        assert!(err.to_string().contains("nothing to copy") || err.to_string().contains("unsafe"));
+        assert!(!tmp.path().join(".powergrok").exists());
         set_project_config_dirname_for_test(None);
     }
 
@@ -559,7 +674,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         fs::create_dir_all(tmp.path().join(".grok/skills")).unwrap();
         let out = run_bootstrap_command(tmp.path(), "");
-        assert!(out.contains("isolation") || out.contains("only `.powergrok`"), "{out}");
+        assert!(
+            out.contains("isolation") || out.contains("only `.powergrok`"),
+            "{out}"
+        );
         assert!(out.contains("--confirm"), "{out}");
         set_project_config_dirname_for_test(None);
     }
@@ -571,6 +689,78 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         fs::create_dir_all(tmp.path().join(".grok")).unwrap();
         assert!(bootstrap_copy_all(tmp.path(), true).is_err());
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn selective_all_miss_leaves_no_powergrok() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        let err = bootstrap_copy_categories(tmp.path(), &["skill"], true).unwrap_err();
+        assert!(err.to_string().contains("nothing to copy"), "{err}");
+        assert!(!tmp.path().join(".powergrok").exists());
+        // Full copy still available after miss.
+        fs::write(tmp.path().join(".grok/config.toml"), "x=1\n").unwrap();
+        bootstrap_copy_all(tmp.path(), true).unwrap();
+        assert!(tmp.path().join(".powergrok/config.toml").is_file());
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_refuses_existing_powergrok() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".powergrok")).unwrap();
+        fs::write(tmp.path().join(".powergrok/x"), "1").unwrap();
+        let err = bootstrap_start_empty(tmp.path(), true).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".powergrok/x")).unwrap(),
+            "1"
+        );
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn copy_all_does_not_follow_out_of_tree_symlink() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        let tmp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.txt"), "SECRET\n").unwrap();
+        fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        fs::write(tmp.path().join(".grok/config.toml"), "ok=1\n").unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".grok/skills")).unwrap();
+
+        let report = bootstrap_copy_all(tmp.path(), true).unwrap();
+        assert!(tmp.path().join(".powergrok/config.toml").is_file());
+        // Must not materialize outside contents under destination.
+        assert!(!tmp.path().join(".powergrok/skills").exists());
+        assert!(!tmp.path().join(".powergrok/skills/secret.txt").exists());
+        assert!(
+            report.skipped.iter().any(|s| s.contains("skills")),
+            "skipped={:?}",
+            report.skipped
+        );
+        // Outside tree untouched and not copied.
+        assert_eq!(
+            fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+            "SECRET\n"
+        );
+        set_project_config_dirname_for_test(None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn not_now_is_non_persistent() {
+        set_project_config_dirname_for_test(Some(".powergrok"));
+        let tmp = TempDir::new().unwrap();
+        let out = run_bootstrap_command(tmp.path(), "--not-now");
+        assert!(out.contains("no persistent suppress"), "{out}");
         set_project_config_dirname_for_test(None);
     }
 }

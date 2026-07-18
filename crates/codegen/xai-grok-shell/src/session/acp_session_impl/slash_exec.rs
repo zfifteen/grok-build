@@ -915,8 +915,21 @@ impl SessionActor {
                 let root = git2::Repository::discover(&cwd)
                     .ok()
                     .and_then(|r| r.workdir().map(|p| p.to_path_buf()))
-                    .unwrap_or(cwd);
-                let text = xai_grok_config::run_bootstrap_command(&root, &args);
+                    .unwrap_or_else(|| cwd.clone());
+                let mut text = xai_grok_config::run_bootstrap_command(&root, &args);
+                // Policy is repo-root bootstrap; note when cwd-local .grok would be missed.
+                if root != cwd
+                    && cwd.join(".grok").is_dir()
+                    && !root.join(".grok").is_dir()
+                    && !args.contains("--confirm")
+                {
+                    text.push_str(&format!(
+                        "\n\nNote: bootstrap targets git root {} (product policy). \
+                         Cwd {} has a local .grok/ that is not used for this command.",
+                        root.display(),
+                        cwd.display()
+                    ));
+                }
                 self.send_slash_command_output(&text).await;
                 ok_end_turn(0, None)
             }
