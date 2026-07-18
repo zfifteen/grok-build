@@ -488,7 +488,11 @@ pub fn merge_persona_lists(bundle: &BundleState, cwd: &Path) -> Vec<PersonaDetai
         }
     }
     let dirs = [
-        (ConfigFileScope::Project, cwd.join(xai_grok_config::project_config_dirname()).join("personas")),
+        (
+            ConfigFileScope::Project,
+            cwd.join(xai_grok_config::project_config_dirname())
+                .join("personas"),
+        ),
         (ConfigFileScope::User, grok_home.join("personas")),
     ];
     for (scope, dir) in dirs {
@@ -603,7 +607,9 @@ pub fn sanitize_config_name(name: &str) -> Result<String, String> {
 fn personas_dir_for_scope(scope: ConfigFileScope, cwd: &Path) -> PathBuf {
     match scope {
         ConfigFileScope::User => xai_grok_config::grok_home().join("personas"),
-        ConfigFileScope::Project => cwd.join(xai_grok_config::project_config_dirname()).join("personas"),
+        ConfigFileScope::Project => cwd
+            .join(xai_grok_config::project_config_dirname())
+            .join("personas"),
     }
 }
 #[derive(serde::Serialize)]

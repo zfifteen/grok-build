@@ -32,9 +32,9 @@ pub use error::EffortBrainError;
 pub use load::{load_effort_brain_config, load_effort_brain_config_from_layers};
 pub use prompt::{brain_description, render_specialist_prompt};
 pub use seed::{ensure_user_effort_brains_seeded, export_builtin_effort_brains_to};
-pub use select::{select_brain_ids, EFFORT_BRAIN_SEED_ENV};
+pub use select::{EFFORT_BRAIN_SEED_ENV, select_brain_ids};
 pub use types::{
-    BrainId, BrainSpec, EffortBrainConfig, RosterMode, RosterSelection, BRAIN_COUNT_HEAVY,
-    EXPERT_K_DEFAULT,
+    BRAIN_COUNT_HEAVY, BrainId, BrainSpec, EXPERT_K_DEFAULT, EffortBrainConfig, RosterMode,
+    RosterSelection,
 };
 pub use validate::validate_effort_brain_config;

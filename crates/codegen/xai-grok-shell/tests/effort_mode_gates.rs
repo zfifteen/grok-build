@@ -29,6 +29,8 @@ fn slash_expert_heavy_normal_resolve_as_builtins() {
             mode: EffortMode::Expert,
             task: None,
             solo: false,
+            confirm_heavy: false,
+            force_team: false,
         }
     );
     assert_eq!(
@@ -37,6 +39,8 @@ fn slash_expert_heavy_normal_resolve_as_builtins() {
             mode: EffortMode::Heavy,
             task: Some("deep audit".into()),
             solo: false,
+            confirm_heavy: false,
+            force_team: false,
         }
     );
     assert_eq!(
@@ -45,6 +49,8 @@ fn slash_expert_heavy_normal_resolve_as_builtins() {
             mode: EffortMode::Normal,
             task: None,
             solo: false,
+            confirm_heavy: false,
+            force_team: false,
         }
     );
 }
@@ -57,6 +63,8 @@ fn slash_solo_parsed_and_stripped_at_resolve() {
             mode: EffortMode::Expert,
             task: Some("fix the flaky test".into()),
             solo: true,
+            confirm_heavy: false,
+            force_team: false,
         }
     );
 }
@@ -69,6 +77,8 @@ fn slash_builtin_wins_over_same_named_skill() {
             mode: EffortMode::Expert,
             task: Some("task".into()),
             solo: true,
+            confirm_heavy: false,
+            force_team: false,
         }
     );
 }
@@ -161,9 +171,10 @@ fn short_team_next_turn_reopens_mandatory_fanout() {
         t.may_execute_writes(false),
         Err(EffortGateError::ExecuteBeforeSynthesis)
     ));
-    assert!(t
-        .on_session_turn_start("architect multi-file retry of auth")
-        .unwrap());
+    assert!(
+        t.on_session_turn_start("architect multi-file retry of auth")
+            .unwrap()
+    );
     assert!(t.needs_mandatory_fanout());
     assert_eq!(t.ledger().len(), 4);
 }
@@ -204,9 +215,10 @@ fn expert_full_team_requires_4_successes() {
     let mut t = EffortModeTracker::new(tmp());
     t.set_mode(EffortMode::Expert, false);
     // Session turn-start hook (what SessionActor::effort_on_turn_start calls).
-    assert!(t
-        .on_session_turn_start("architect multi-file auth migration")
-        .unwrap());
+    assert!(
+        t.on_session_turn_start("architect multi-file auth migration")
+            .unwrap()
+    );
     for i in 0..3 {
         t.on_session_specialist_outcome(i, SpecialistStatus::Success, Some(format!("t{i}")))
             .unwrap();
@@ -439,12 +451,8 @@ fn needs_mandatory_fanout_tracks_unbound_pending_slots() {
     assert!(t.needs_mandatory_fanout());
     // Pre-bind all slots as the shell orchestrator does before spawn.
     for i in 0..4 {
-        t.record_outcome(
-            i,
-            SpecialistStatus::Running,
-            Some(format!("task-{i}")),
-        )
-        .unwrap();
+        t.record_outcome(i, SpecialistStatus::Running, Some(format!("task-{i}")))
+            .unwrap();
     }
     assert!(!t.needs_mandatory_fanout());
     // Full success finalizes and unlocks execute.
@@ -499,7 +507,7 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
             target_n: Some(4),
             solo_waiver: false,
             brain_hint: None,
-        })
+         elapsed_secs: None, resume_notice: false, waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None, })
         .as_deref(),
         Some("Expert")
     );
@@ -510,7 +518,7 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
             successful: 0,
             target_n: Some(16),
             solo_waiver: false,
-        })
+         brain_hint: None, elapsed_secs: None, resume_notice: false, waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None, })
         .as_deref(),
         Some("Heavy")
     );
@@ -524,7 +532,7 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
             target_n: None,
             solo_waiver: false,
             brain_hint: None,
-        }),
+         elapsed_secs: None, resume_notice: false, waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None, }),
         None
     );
 
@@ -536,14 +544,17 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
             successful: 2,
             target_n: Some(4),
             solo_waiver: false,
-        })
+         brain_hint: None, elapsed_secs: None, resume_notice: false, waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None, })
         .as_deref(),
         Some("Expert 2 of 4")
     );
     let mut t = EffortModeTracker::new(tmp());
     t.set_mode(EffortMode::Heavy, false);
     t.begin_team_run().unwrap();
-    let label = t.chrome_state().status_label().expect("heavy pursuing chrome");
+    let label = t
+        .chrome_state()
+        .status_label()
+        .expect("heavy pursuing chrome");
     assert!(label.contains("Heavy"), "{label}");
     assert!(label.contains("0 of 16"), "{label}");
     for i in 0..5 {
@@ -562,7 +573,7 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
             target_n: Some(4),
             solo_waiver: false,
             brain_hint: None,
-        })
+         elapsed_secs: None, resume_notice: false, waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None, })
         .as_deref(),
         Some("Expert Partial 1 of 4")
     );
@@ -573,7 +584,7 @@ fn effort_chrome_labels_mode_progress_partial_waived_and_normal_clears() {
             successful: 0,
             target_n: Some(16),
             solo_waiver: false,
-        })
+         brain_hint: None, elapsed_secs: None, resume_notice: false, waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None, })
         .as_deref(),
         Some("Heavy Waived")
     );

@@ -164,8 +164,7 @@ pub fn format_install_status_report() -> String {
             lines.push(format!("  VERSION_file: {}", st.path.display()));
             if st.is_rolled_back() {
                 lines.push(
-                    "  state: rolled-back (restored from powergrok.prev — not a commit SHA)"
-                        .into(),
+                    "  state: rolled-back (restored from powergrok.prev — not a commit SHA)".into(),
                 );
                 if let Some(n) = &st.note {
                     lines.push(format!("  note: {n}"));
@@ -264,7 +263,10 @@ mod tests {
         assert_eq!(st.built_at.as_deref(), Some("2026-07-18T00:00:00Z"));
         assert_eq!(st.features.as_deref(), Some("powergrok"));
         assert!(
-            st.version_line.as_deref().unwrap_or("").contains("Power Grok")
+            st.version_line
+                .as_deref()
+                .unwrap_or("")
+                .contains("Power Grok")
         );
         assert!(!st.is_rolled_back());
     }
@@ -287,7 +289,9 @@ mod tests {
     fn auto_update_false_strict() {
         assert!(config_has_auto_update_false("[cli]\nauto_update = false\n"));
         assert!(config_has_auto_update_false("auto_update=false\n"));
-        assert!(config_has_auto_update_false("  auto_update = false  # seed\n"));
+        assert!(config_has_auto_update_false(
+            "  auto_update = false  # seed\n"
+        ));
         // Comment-only must not count as false.
         assert!(!config_has_auto_update_false("# auto_update was false\n"));
         // true with "false" in comment must not count.

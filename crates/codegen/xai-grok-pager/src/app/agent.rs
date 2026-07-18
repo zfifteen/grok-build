@@ -1,3 +1,4 @@
+#![allow(clippy::single_range_in_vec_init)]
 //! Agent business types.
 //!
 //! Pure data types for agent session management. No UI or rendering logic.

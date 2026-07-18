@@ -68,9 +68,10 @@ pub(super) fn dispatch_send_feedback(app: &mut AppView, text: String) -> Vec<Eff
         return vec![];
     };
 
-    agent.scrollback.push_block(RenderBlock::system(
-        format!("Thanks for the feedback! The {} team is on it.", xai_grok_config::product_name()),
-    ));
+    agent.scrollback.push_block(RenderBlock::system(format!(
+        "Thanks for the feedback! The {} team is on it.",
+        xai_grok_config::product_name()
+    )));
 
     vec![Effect::SendFeedback {
         agent_id: id,

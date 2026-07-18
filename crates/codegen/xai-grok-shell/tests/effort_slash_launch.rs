@@ -12,7 +12,7 @@ fn launch_expert_empty_and_with_task() {
             mode: EffortMode::Expert,
             task: None,
             solo: false,
-        }
+        confirm_heavy: false, force_team: false, }
     );
     assert_eq!(
         resolve_effort_slash("/expert fix CI", true, &[]),
@@ -20,7 +20,7 @@ fn launch_expert_empty_and_with_task() {
             mode: EffortMode::Expert,
             task: Some("fix CI".into()),
             solo: false,
-        }
+        confirm_heavy: false, force_team: false, }
     );
 }
 
@@ -32,7 +32,7 @@ fn launch_normal_clears_via_resolve() {
             mode: EffortMode::Normal,
             task: None,
             solo: false,
-        }
+        confirm_heavy: false, force_team: false, }
     );
 }
 

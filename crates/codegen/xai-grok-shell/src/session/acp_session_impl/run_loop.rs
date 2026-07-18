@@ -1,3 +1,4 @@
+#![allow(clippy::possible_missing_else)]
 //! The session actor's main loop (`run_session`): command dispatch, idle
 //! arms, and the free helpers only the loop consumes.
 #![allow(clippy::items_after_test_module)]
@@ -903,13 +904,13 @@ pub(super) fn turn_texts_for_feedback(
         .skip(start + 1)
         .take_while(|item| !matches!(item, ConversationItem::User(_)))
         .find_map(|item| {
-            if let ConversationItem::Assistant(a) = item
-                && !a.content.trim().is_empty()
-            {
-                Some(a.content.as_ref().to_owned())
-            } else {
-                None
+            #[allow(clippy::collapsible_if)]
+            if let ConversationItem::Assistant(a) = item {
+                if !a.content.trim().is_empty() {
+                    return Some(a.content.as_ref().to_owned());
+                }
             }
+            None
         });
     (user_text, assistant_text)
 }

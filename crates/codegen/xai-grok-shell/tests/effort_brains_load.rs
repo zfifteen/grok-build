@@ -1,11 +1,11 @@
 //! Focused integration tests for effort reasoning brains.
 
 use xai_grok_shell::session::effort_brains::{
-    load_effort_brain_config_from_layers, select_brain_ids, EffortBrainError, RosterSelection,
-    BRAIN_COUNT_HEAVY, EXPERT_K_DEFAULT, EFFORT_BRAIN_SEED_ENV,
+    BRAIN_COUNT_HEAVY, EFFORT_BRAIN_SEED_ENV, EXPERT_K_DEFAULT, EffortBrainError, RosterSelection,
+    load_effort_brain_config_from_layers, select_brain_ids,
 };
 use xai_grok_shell::session::effort_mode::{
-    build_specialist_briefs, format_team_report_package, EffortMode, EffortModeTracker,
+    EffortMode, EffortModeTracker, build_specialist_briefs, format_team_report_package,
 };
 
 #[test]
@@ -115,7 +115,6 @@ fn tracker_begin_locks_brain_roles() {
     assert_eq!(pending[0].brain_id, "first_principles");
 }
 
-
 #[test]
 fn chrome_includes_brain_hint() {
     use xai_grok_shell::session::effort_mode::format_effort_chrome_label;
@@ -143,6 +142,9 @@ fn chrome_includes_brain_hint() {
         target_n: Some(4),
         solo_waiver: false,
         brain_hint: Some("bayesian_update".into()),
+        elapsed_secs: None,
+        resume_notice: false,
+        waiver_reason: xai_grok_shell::session::effort_mode::WaiverReason::None,
     })
     .unwrap();
     assert_eq!(bare, "Expert 1 of 4 · bayesian_update");

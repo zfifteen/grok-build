@@ -11,8 +11,8 @@
 use super::defaults::{expand_expert_pool_all, parse_brain_markdown};
 use super::error::EffortBrainError;
 use super::types::{
-    BrainId, BrainSpec, CatalogFile, EffortBrainConfig, RosterFile, RosterSelection,
-    CATALOG_VERSION,
+    BrainId, BrainSpec, CATALOG_VERSION, CatalogFile, EffortBrainConfig, RosterFile,
+    RosterSelection,
 };
 use super::validate::validate_effort_brain_config;
 use std::path::{Path, PathBuf};
@@ -58,10 +58,11 @@ fn merge_layer(
             path: catalog_path.clone(),
             detail: e.to_string(),
         })?;
-        let catalog: CatalogFile = toml::from_str(&text).map_err(|e| EffortBrainError::CatalogParse {
-            source: catalog_path.display().to_string(),
-            detail: e.to_string(),
-        })?;
+        let catalog: CatalogFile =
+            toml::from_str(&text).map_err(|e| EffortBrainError::CatalogParse {
+                source: catalog_path.display().to_string(),
+                detail: e.to_string(),
+            })?;
         if catalog.version != CATALOG_VERSION {
             return Err(EffortBrainError::UnsupportedVersion {
                 found: catalog.version,

@@ -800,7 +800,13 @@ impl BuiltinAction {
     pub(crate) fn args_provided(&self) -> bool {
         match self {
             BuiltinAction::Compact { user_context } => user_context.is_some(),
-            BuiltinAction::SetEffortMode { task, solo, force_team, confirm_heavy, .. } => task.is_some() || *solo || *force_team || *confirm_heavy,
+            BuiltinAction::SetEffortMode {
+                task,
+                solo,
+                force_team,
+                confirm_heavy,
+                ..
+            } => task.is_some() || *solo || *force_team || *confirm_heavy,
             BuiltinAction::SetYolo { .. } => true,
             BuiltinAction::FlushMemory => false,
             BuiltinAction::Dream => false,
@@ -931,9 +937,7 @@ pub(crate) fn parse_skill_references(
         let is_active_builtin = BUILTIN_COMMANDS
             .iter()
             .chain(PROMPT_COMMANDS.iter())
-            .any(|b| {
-                (b.name == word || b.aliases.contains(&word)) && availability.allows(b.gate)
-            });
+            .any(|b| (b.name == word || b.aliases.contains(&word)) && availability.allows(b.gate));
         if is_active_builtin {
             i = end;
             continue;
@@ -1124,12 +1128,7 @@ pub fn resolve_effort_slash(
         prompt.to_string(),
     ))];
 
-    match resolve(
-        blocks,
-        &skills,
-        availability,
-        SkillSlashRewrite::default(),
-    ) {
+    match resolve(blocks, &skills, availability, SkillSlashRewrite::default()) {
         Err(SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode {
             mode,
             task,
@@ -1555,11 +1554,8 @@ mod tests {
             }) if t == "rename foo"
         ));
         // Glue: resolve → encode inject → on_session_turn_start unlocks + pursues.
-        let action = resolve_builtin(
-            "heavy",
-            "--confirm architect multi-file auth migration",
-        )
-        .expect("resolve");
+        let action = resolve_builtin("heavy", "--confirm architect multi-file auth migration")
+            .expect("resolve");
         let BuiltinAction::SetEffortMode {
             mode,
             task,
@@ -1622,7 +1618,10 @@ mod tests {
             )
             .unwrap_err();
             assert!(
-                matches!(outcome, SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode { .. })),
+                matches!(
+                    outcome,
+                    SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode { .. })
+                ),
                 "expected SetEffortMode for /{name}"
             );
         }

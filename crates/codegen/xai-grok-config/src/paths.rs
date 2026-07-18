@@ -72,10 +72,12 @@ pub fn user_grok_home() -> Option<PathBuf> {
 /// [`grok_home`] OnceLock discipline). Fail-closed: powergrok never falls back
 /// to reading project `.grok/` (D7).
 pub fn project_config_dirname() -> &'static str {
-    if let Ok(guard) = PROJECT_CONFIG_DIRNAME_TEST_OVERRIDE.lock() {
-        if let Some(name) = *guard {
-            return name;
-        }
+    if let Some(name) = PROJECT_CONFIG_DIRNAME_TEST_OVERRIDE
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+    {
+        return name;
     }
     PROJECT_CONFIG_DIRNAME.get_or_init(resolve_project_config_dirname_from_argv0)
 }

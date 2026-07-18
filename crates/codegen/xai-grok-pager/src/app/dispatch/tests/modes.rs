@@ -1,3 +1,4 @@
+#![allow(clippy::single_range_in_vec_init)]
 //! Tests for plan, yolo, auto, and permission mode transitions.
 
 use super::*;

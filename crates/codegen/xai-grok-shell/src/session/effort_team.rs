@@ -154,17 +154,7 @@ pub async fn run_planned_team(
             let parent = parent_session_id.to_string();
             let prompt_id = parent_prompt_id.clone();
             let cwd = cwd.clone();
-            async move {
-                spawn_specialist(
-                    &tx,
-                    &parent,
-                    prompt_id,
-                    cwd,
-                    p.task_id,
-                    p.brief,
-                )
-                .await
-            }
+            async move { spawn_specialist(&tx, &parent, prompt_id, cwd, p.task_id, p.brief).await }
         })
         .collect();
     futures::future::join_all(futs).await
@@ -177,10 +167,7 @@ mod tests {
 
     #[test]
     fn build_via_run_helpers_sizes() {
-        assert_eq!(
-            build_specialist_briefs(EffortMode::Expert, "t").len(),
-            4
-        );
+        assert_eq!(build_specialist_briefs(EffortMode::Expert, "t").len(), 4);
         assert_eq!(build_specialist_briefs(EffortMode::Heavy, "t").len(), 16);
     }
 

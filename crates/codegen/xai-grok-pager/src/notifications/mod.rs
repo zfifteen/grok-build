@@ -478,7 +478,7 @@ mod tests {
         });
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: xai_grok_config::product_name().to_string().into(),
+            title: xai_grok_config::product_name().to_string(),
             body: "Turn complete".into(),
             session_id: Some("test-session".into()),
         });
@@ -493,7 +493,7 @@ mod tests {
         });
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::SessionReady,
-            title: xai_grok_config::product_name().to_string().into(),
+            title: xai_grok_config::product_name().to_string(),
             body: "Session ready".into(),
             session_id: None,
         });
@@ -750,7 +750,7 @@ mod tests {
         // crash regardless of suppression state.
         svc.notify(NotificationEvent {
             kind: NotificationEventKind::TurnComplete,
-            title: xai_grok_config::product_name().to_string().into(),
+            title: xai_grok_config::product_name().to_string(),
             body: "Done".into(),
             session_id: None,
         });

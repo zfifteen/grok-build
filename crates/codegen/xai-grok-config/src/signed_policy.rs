@@ -57,7 +57,23 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 }
 /// Run `f` over the trusted key set — the compiled-in [`EMBEDDED_DEPLOYMENT_CONFIG_PUBKEYS`],
 /// unless the compile-time-excluded test seam overrides it.
+#[cfg(any(test, debug_assertions))]
+pub mod test_seam {
+    use std::sync::RwLock;
+    pub static MOCK_KEYS: RwLock<Vec<(&'static str, &'static [u8])>> = RwLock::new(Vec::new());
+    pub fn set_embedded_keys(keys: &[(&'static str, &'static [u8])]) {
+        *MOCK_KEYS.write().unwrap() = keys.to_vec();
+    }
+}
+
 fn with_embedded_keys<R>(f: impl FnOnce(&[(&str, &[u8])]) -> R) -> R {
+    #[cfg(any(test, debug_assertions))]
+    {
+        let mock = test_seam::MOCK_KEYS.read().unwrap();
+        if !mock.is_empty() {
+            return f(&mock);
+        }
+    }
     f(EMBEDDED_DEPLOYMENT_CONFIG_PUBKEYS)
 }
 /// Sidecar persisted next to the policy so the load-time gate can re-verify it offline.
