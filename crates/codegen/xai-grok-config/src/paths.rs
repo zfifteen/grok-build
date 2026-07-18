@@ -90,6 +90,15 @@ pub fn is_powergrok_project_tree() -> bool {
     project_config_dirname() == ".powergrok"
 }
 
+/// G4 predicate (pure): powergrok process, workspace has `.grok/`, lacks `.powergrok/`.
+/// Independent of the one-shot latch so tests can assert conditions without
+/// process-order dependence.
+pub fn should_emit_empty_project_layer_warning(workspace_root: &Path) -> bool {
+    is_powergrok_project_tree()
+        && workspace_root.join(".grok").is_dir()
+        && !workspace_root.join(".powergrok").is_dir()
+}
+
 /// G4: one-shot empty project-layer warning when running as powergrok, the
 /// workspace has `.grok/` but no `.powergrok/`. Returns the message if it should
 /// be shown **now** (first call only for this process when conditions hold).
@@ -97,12 +106,7 @@ pub fn is_powergrok_project_tree() -> bool {
 /// Callers choose the channel (stderr, toast, status). Never auto-copies.
 pub fn take_empty_project_layer_warning(workspace_root: &Path) -> Option<&'static str> {
     static WARNED: OnceLock<()> = OnceLock::new();
-    if !is_powergrok_project_tree() {
-        return None;
-    }
-    let has_official = workspace_root.join(".grok").is_dir();
-    let has_power = workspace_root.join(".powergrok").is_dir();
-    if !(has_official && !has_power) {
+    if !should_emit_empty_project_layer_warning(workspace_root) {
         return None;
     }
     if WARNED.set(()).is_err() {
@@ -445,8 +449,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(root.join(".grok")).unwrap();
-        // Message may already have been taken earlier in this process (OnceLock);
-        // when returned it must match G4 copy. When None, process already warned.
+        assert!(
+            should_emit_empty_project_layer_warning(root),
+            "pure predicate must hold regardless of latch"
+        );
+        // One-shot take: first Some (if latch free) must match G4 copy.
         if let Some(msg) = take_empty_project_layer_warning(root) {
             assert!(msg.contains(".powergrok"), "{msg}");
             assert!(msg.contains("cp -R .grok .powergrok"), "{msg}");
@@ -466,8 +473,7 @@ mod tests {
         let root = tmp.path();
         std::fs::create_dir_all(root.join(".grok")).unwrap();
         std::fs::create_dir_all(root.join(".powergrok")).unwrap();
-        // May or may not have already warned in this process from prior test;
-        // if power dir exists, must not warn regardless.
+        assert!(!should_emit_empty_project_layer_warning(root));
         assert!(take_empty_project_layer_warning(root).is_none());
         set_project_config_dirname_for_test(None);
     }
@@ -482,6 +488,7 @@ mod tests {
         );
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join(".grok")).unwrap();
+        assert!(!should_emit_empty_project_layer_warning(tmp.path()));
         assert!(take_empty_project_layer_warning(tmp.path()).is_none());
         set_project_config_dirname_for_test(None);
     }

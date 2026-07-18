@@ -9,10 +9,26 @@
 
 use std::path::{Path, PathBuf};
 
-/// Directories that contain skill definitions (`.grok/skills/`, `.agents/skills/`,
-/// `.claude/skills/`, `.cursor/skills/`). Shared between startup skill discovery
-/// and runtime `SkillDiscoveryReminder`.
-pub const SKILL_CONFIG_DIRS: &[&str] = &[".grok", ".powergrok", ".agents", ".claude", ".cursor"];
+/// Directories that may contain skill definitions under a product or vendor
+/// basename (e.g. `<name>/skills/`).
+///
+/// **D7:** the product basename is **exactly one** value from
+/// [`xai_grok_config::project_config_dirname`] — never both `.grok` and
+/// `.powergrok` in the same process. Vendor dirs (`.agents`, `.claude`, …)
+/// follow.
+pub fn skill_product_and_vendor_config_dirs() -> Vec<&'static str> {
+    vec![
+        xai_grok_config::project_config_dirname(),
+        ".agents",
+        ".claude",
+        ".cursor",
+    ]
+}
+
+/// @deprecated Prefer [`skill_product_and_vendor_config_dirs`]. Kept as a name
+/// alias for call sites that still expect a const-style identifier.
+#[deprecated(note = "use skill_product_and_vendor_config_dirs() — active product dirname only")]
+pub const SKILL_CONFIG_DIRS: &[&str] = &[".grok", ".agents", ".claude", ".cursor"];
 
 use crate::implementations::skills::discovery;
 use crate::implementations::skills::types::SkillScope;
@@ -81,12 +97,16 @@ impl SkillDiscoveryReminder {
     /// Check whether a SKILL.md path is inside a supported skills directory
     /// (`.grok/skills/`, `.agents/skills/`, or `.claude/skills/`).
     fn is_in_supported_skills_dir(path: &Path) -> bool {
+        let allowed = skill_product_and_vendor_config_dirs();
         for ancestor in path.ancestors().skip(1) {
             if ancestor.file_name().is_some_and(|n| n == "skills") {
                 return ancestor
                     .parent()
                     .and_then(|p| p.file_name())
-                    .is_some_and(|n| SKILL_CONFIG_DIRS.iter().any(|d| *d == n));
+                    .is_some_and(|n| {
+                        let name = n.to_string_lossy();
+                        allowed.iter().any(|d| *d == name)
+                    });
             }
         }
         false
