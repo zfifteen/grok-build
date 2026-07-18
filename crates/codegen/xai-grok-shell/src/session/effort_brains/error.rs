@@ -14,7 +14,11 @@ pub enum EffortBrainError {
         detail: String,
     },
     /// Brain markdown/frontmatter could not be parsed.
-    BrainParse { id: String, source: String, detail: String },
+    BrainParse {
+        id: String,
+        source: String,
+        detail: String,
+    },
     /// Catalog `version` is unsupported.
     UnsupportedVersion { found: u32, expected: u32 },
     /// Roster references an id missing from the catalog.
@@ -58,7 +62,10 @@ impl std::fmt::Display for EffortBrainError {
                 "effort-brains {mode} roster parse failed ({source}): {detail}"
             ),
             Self::BrainParse { id, source, detail } => {
-                write!(f, "effort-brains brain `{id}` parse failed ({source}): {detail}")
+                write!(
+                    f,
+                    "effort-brains brain `{id}` parse failed ({source}): {detail}"
+                )
             }
             Self::UnsupportedVersion { found, expected } => {
                 write!(
@@ -67,7 +74,10 @@ impl std::fmt::Display for EffortBrainError {
                 )
             }
             Self::UnknownBrainId { id, roster } => {
-                write!(f, "effort-brains roster `{roster}` references unknown id `{id}`")
+                write!(
+                    f,
+                    "effort-brains roster `{roster}` references unknown id `{id}`"
+                )
             }
             Self::HeavySlotCount { found, expected } => {
                 write!(
@@ -82,10 +92,7 @@ impl std::fmt::Display for EffortBrainError {
                 )
             }
             Self::ExpertPoolTooSmall { pool, k } => {
-                write!(
-                    f,
-                    "effort-brains expert pool size {pool} < k={k}"
-                )
+                write!(f, "effort-brains expert pool size {pool} < k={k}")
             }
             Self::MissingContrarianClass => write!(
                 f,

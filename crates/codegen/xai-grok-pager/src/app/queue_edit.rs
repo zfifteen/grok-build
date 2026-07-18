@@ -1,3 +1,4 @@
+#![allow(clippy::single_range_in_vec_init)]
 //! Queued-prompt editing (`PromptMode::EditingQueued`) state machine.
 //!
 //! Extracted from `agent_view.rs` as a sibling `impl AgentView` block (same
@@ -755,7 +756,7 @@ mod tests {
                 assert_eq!(b.text, "great /pr-workflow go");
                 assert_eq!(
                     b.skill_token_ranges,
-                    vec![6..18],
+                    vec![(6..18)],
                     "echo must style the recomputed mid-text token"
                 );
             }
@@ -768,7 +769,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(text, "great /pr-workflow go");
-                assert_eq!(skill_token_ranges, &vec![6..18]);
+                assert_eq!(skill_token_ranges, &vec![(6..18)]);
             }
             other => panic!("expected plain SendPrompt, got {other:?}"),
         }

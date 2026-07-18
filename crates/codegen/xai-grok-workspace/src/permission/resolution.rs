@@ -223,7 +223,9 @@ fn find_project_grok_configs(cwd: &Path) -> Vec<PathBuf> {
     if let Some(ref root) = git_root {
         let mut current = Some(cwd.to_path_buf());
         while let Some(dir) = current {
-            let p = dir.join(xai_grok_config::project_config_dirname()).join("config.toml");
+            let p = dir
+                .join(xai_grok_config::project_config_dirname())
+                .join("config.toml");
             if p.is_file() {
                 configs.push(p);
             }
@@ -234,7 +236,9 @@ fn find_project_grok_configs(cwd: &Path) -> Vec<PathBuf> {
         }
         configs.reverse();
     } else {
-        let p = cwd.join(xai_grok_config::project_config_dirname()).join("config.toml");
+        let p = cwd
+            .join(xai_grok_config::project_config_dirname())
+            .join("config.toml");
         if p.is_file() {
             configs.push(p);
         }

@@ -329,8 +329,8 @@ pub mod memory;
 pub(crate) mod normalize_cache;
 pub mod persistence;
 pub use xai_grok_shared::placeholder_images;
-pub mod effort_mode;
 pub mod effort_brains;
+pub mod effort_mode;
 pub(crate) mod effort_team;
 /// Shipped slash resolve surface for effort-mode builtins (integration tests
 /// and headless launch checks drive this, not a reimplementation).

@@ -1,3 +1,4 @@
+#![allow(clippy::single_range_in_vec_init)]
 //! Tests for prompt and bash submission, queueing, and interject shims.
 
 use super::*;

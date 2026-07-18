@@ -503,11 +503,13 @@ pub(crate) async fn spawn_session_actor(
         let tracker = {
             let path = session_dir.join("effort_mode.json");
             if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(snapshot) =
-                    serde_json::from_slice::<crate::session::effort_mode::EffortModeSnapshot>(&bytes)
+                if let Ok(snapshot) = serde_json::from_slice::<
+                    crate::session::effort_mode::EffortModeSnapshot,
+                >(&bytes)
                 {
                     crate::session::effort_mode::EffortModeTracker::from_snapshot(
-                        session_dir, snapshot,
+                        session_dir,
+                        snapshot,
                     )
                 } else {
                     crate::session::effort_mode::EffortModeTracker::new(session_dir)

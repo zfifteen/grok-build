@@ -5,8 +5,8 @@
 
 use super::error::EffortBrainError;
 use super::types::{
-    BrainFrontmatter, BrainId, BrainSpec, CatalogFile, EffortBrainConfig, RosterFile,
-    RosterSelection, CATALOG_VERSION,
+    BrainFrontmatter, BrainId, BrainSpec, CATALOG_VERSION, CatalogFile, EffortBrainConfig,
+    RosterFile, RosterSelection,
 };
 use std::collections::BTreeMap;
 
@@ -22,12 +22,11 @@ const EXPERT_ROSTER_TOML: &str = include_str!("rosters/expert.toml");
 
 /// Build the built-in [`EffortBrainConfig`] from embedded strings.
 pub fn built_in_effort_brain_config() -> Result<EffortBrainConfig, EffortBrainError> {
-    let catalog: CatalogFile = toml::from_str(CATALOG_TOML).map_err(|e| {
-        EffortBrainError::CatalogParse {
+    let catalog: CatalogFile =
+        toml::from_str(CATALOG_TOML).map_err(|e| EffortBrainError::CatalogParse {
             source: "builtin:catalog.toml".into(),
             detail: e.to_string(),
-        }
-    })?;
+        })?;
     if catalog.version != CATALOG_VERSION {
         return Err(EffortBrainError::UnsupportedVersion {
             found: catalog.version,
@@ -42,11 +41,10 @@ pub fn built_in_effort_brain_config() -> Result<EffortBrainConfig, EffortBrainEr
                 id: entry.id.clone(),
             });
         }
-        let raw = builtin_brain_markdown(&entry.id).ok_or_else(|| {
-            EffortBrainError::MissingFile {
+        let raw =
+            builtin_brain_markdown(&entry.id).ok_or_else(|| EffortBrainError::MissingFile {
                 path: format!("builtin:brains/{}.md", entry.id).into(),
-            }
-        })?;
+            })?;
         let (fm, body) = parse_brain_markdown(raw, &entry.id)?;
         if fm.id != entry.id {
             return Err(EffortBrainError::BrainIdMismatch {
@@ -172,11 +170,12 @@ pub(crate) fn parse_brain_markdown(
     };
     let yaml = &rest[..end];
     let body = rest[end + 4..].trim_start_matches('\n').to_string();
-    let fm: BrainFrontmatter = serde_yaml::from_str(yaml).map_err(|e| EffortBrainError::BrainParse {
-        id: fallback_id.into(),
-        source: format!("builtin:brains/{fallback_id}.md"),
-        detail: e.to_string(),
-    })?;
+    let fm: BrainFrontmatter =
+        serde_yaml::from_str(yaml).map_err(|e| EffortBrainError::BrainParse {
+            id: fallback_id.into(),
+            source: format!("builtin:brains/{fallback_id}.md"),
+            detail: e.to_string(),
+        })?;
     Ok((fm, body))
 }
 
@@ -204,14 +203,10 @@ fn builtin_brain_markdown(id: &str) -> Option<&'static str> {
 
 /// Expand Expert `pool = all` (empty pool vec) to every catalog id in stable order.
 pub(crate) fn expand_expert_pool_all(cfg: &mut EffortBrainConfig) {
+    #[allow(clippy::collapsible_if)]
     if let RosterSelection::Random { k: _, pool } = &mut cfg.expert {
         if pool.is_empty() {
-            *pool = cfg
-                .brains
-                .keys()
-                .cloned()
-                .map(BrainId)
-                .collect();
+            *pool = cfg.brains.keys().cloned().map(BrainId).collect();
         }
     }
 }

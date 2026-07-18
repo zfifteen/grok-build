@@ -258,7 +258,10 @@ fn upsell_non_max_unified_shows_buy_credits() {
     assert_eq!(q.options[1].label, "Buy more credits");
     assert_eq!(
         q.options[1].description,
-        &format!("Purchase credits to keep using {}", xai_grok_config::product_name())
+        format!(
+            "Purchase credits to keep using {}",
+            xai_grok_config::product_name()
+        )
     );
 }
 
@@ -833,7 +836,10 @@ fn free_usage_upsell_shows_two_options_with_exact_labels() {
         ),
         (
             "Upgrade to SuperGrok Heavy",
-            &format!("Get the most out of {}. Highest usage limits.", xai_grok_config::product_name()),
+            &format!(
+                "Get the most out of {}. Highest usage limits.",
+                xai_grok_config::product_name()
+            ),
             Some(UPSELL_URL_UPGRADE),
         ),
     ];

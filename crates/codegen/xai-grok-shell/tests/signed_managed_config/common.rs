@@ -138,7 +138,7 @@ pub fn install_test_key() -> (ring::signature::Ed25519KeyPair, Vec<u8>) {
     let pkcs8 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     let kp = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
     let pubkey = kp.public_key().as_ref().to_vec();
-    signed_policy::test_seam::set_embedded_keys(&[(TEST_KEY_ID, &pubkey)]);
+    xai_grok_config::signed_policy::test_seam::set_embedded_keys(&[(TEST_KEY_ID, Box::leak(pubkey.clone().into_boxed_slice()))]);
     assert!(
         signed_policy::verification_active(),
         "the seam must arm verification"
@@ -173,11 +173,12 @@ pub fn signed_team_body(
 ) -> String {
     let payload = SignedPayload {
         version: prod_mc_cli_chat_proxy_types::SIGNED_PAYLOAD_VERSION,
+        typ: "policy".to_string(),
         deployment_id: None,
         team_id: Some(team_id.to_owned()),
         managed_config: managed.map(str::to_owned),
         requirements: requirements.map(str::to_owned),
-        fail_closed: requirements.is_some_and(xai_grok_config::fail_closed_flag_from_str),
+        fail_closed: requirements.is_some_and(|req| req.contains("fail_closed = true")),
         expires_at: TEST_EXPIRES_AT,
         key_id: TEST_KEY_ID.into(),
     };

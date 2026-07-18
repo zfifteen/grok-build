@@ -31,21 +31,57 @@ pub fn export_builtin_effort_brains_to(root: &Path) -> Result<(), EffortBrainErr
     )?;
 
     const BRAINS: &[(&str, &str)] = &[
-        ("first_principles", include_str!("defaults/brains/first_principles.md")),
-        ("map_territory", include_str!("defaults/brains/map_territory.md")),
-        ("circle_of_competence", include_str!("defaults/brains/circle_of_competence.md")),
-        ("systems_loops", include_str!("defaults/brains/systems_loops.md")),
-        ("theory_of_constraints", include_str!("defaults/brains/theory_of_constraints.md")),
-        ("five_whys_root", include_str!("defaults/brains/five_whys_root.md")),
-        ("second_order", include_str!("defaults/brains/second_order.md")),
+        (
+            "first_principles",
+            include_str!("defaults/brains/first_principles.md"),
+        ),
+        (
+            "map_territory",
+            include_str!("defaults/brains/map_territory.md"),
+        ),
+        (
+            "circle_of_competence",
+            include_str!("defaults/brains/circle_of_competence.md"),
+        ),
+        (
+            "systems_loops",
+            include_str!("defaults/brains/systems_loops.md"),
+        ),
+        (
+            "theory_of_constraints",
+            include_str!("defaults/brains/theory_of_constraints.md"),
+        ),
+        (
+            "five_whys_root",
+            include_str!("defaults/brains/five_whys_root.md"),
+        ),
+        (
+            "second_order",
+            include_str!("defaults/brains/second_order.md"),
+        ),
         ("inversion", include_str!("defaults/brains/inversion.md")),
         ("pre_mortem", include_str!("defaults/brains/pre_mortem.md")),
-        ("scientific_method", include_str!("defaults/brains/scientific_method.md")),
-        ("bayesian_update", include_str!("defaults/brains/bayesian_update.md")),
-        ("fermi_estimate", include_str!("defaults/brains/fermi_estimate.md")),
-        ("via_negativa", include_str!("defaults/brains/via_negativa.md")),
+        (
+            "scientific_method",
+            include_str!("defaults/brains/scientific_method.md"),
+        ),
+        (
+            "bayesian_update",
+            include_str!("defaults/brains/bayesian_update.md"),
+        ),
+        (
+            "fermi_estimate",
+            include_str!("defaults/brains/fermi_estimate.md"),
+        ),
+        (
+            "via_negativa",
+            include_str!("defaults/brains/via_negativa.md"),
+        ),
         ("ooda_tempo", include_str!("defaults/brains/ooda_tempo.md")),
-        ("steelman_dialectic", include_str!("defaults/brains/steelman_dialectic.md")),
+        (
+            "steelman_dialectic",
+            include_str!("defaults/brains/steelman_dialectic.md"),
+        ),
         ("red_team", include_str!("defaults/brains/red_team.md")),
     ];
     for (id, body) in BRAINS {

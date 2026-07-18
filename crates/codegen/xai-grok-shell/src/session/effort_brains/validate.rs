@@ -1,9 +1,7 @@
 //! Validation for resolved effort-brain configs (plan F8, F11, F13).
 
 use super::error::EffortBrainError;
-use super::types::{
-    EffortBrainConfig, RosterSelection, BRAIN_COUNT_HEAVY, EXPERT_K_DEFAULT,
-};
+use super::types::{BRAIN_COUNT_HEAVY, EXPERT_K_DEFAULT, EffortBrainConfig, RosterSelection};
 
 /// Validate a fully merged [`EffortBrainConfig`].
 ///
@@ -39,12 +37,13 @@ pub(crate) fn validate_roster(
             }
             let mut any_contrarian = false;
             for id in slots {
-                let spec = brains.get(id.as_str()).ok_or_else(|| {
-                    EffortBrainError::UnknownBrainId {
-                        id: id.as_str().to_string(),
-                        roster: roster_name.to_string(),
-                    }
-                })?;
+                let spec =
+                    brains
+                        .get(id.as_str())
+                        .ok_or_else(|| EffortBrainError::UnknownBrainId {
+                            id: id.as_str().to_string(),
+                            roster: roster_name.to_string(),
+                        })?;
                 if spec.contrarian_class {
                     any_contrarian = true;
                 }

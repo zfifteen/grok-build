@@ -408,14 +408,17 @@ impl SessionActor {
                     n = tracker.target_n(),
                     "effort mode: began fixed team run"
                 );
+                let preflight = tracker.take_preflight_message();
                 drop(tracker);
+                if let Some(msg) = preflight {
+                    self.push_system_reminder_with_tag(&msg, self.reminder_wrapper_tag());
+                }
                 self.persist_effort_mode_state();
                 self.emit_effort_chrome_update();
             }
             Ok(false) => {
-                let needs_heavy_confirm =
-                    tracker.last_waiver()
-                        == crate::session::effort_mode::WaiverReason::NeedsHeavyConfirm;
+                let needs_heavy_confirm = tracker.last_waiver()
+                    == crate::session::effort_mode::WaiverReason::NeedsHeavyConfirm;
                 let resume = tracker.take_resume_elevated_notice();
                 let mode = tracker.mode();
                 drop(tracker);
@@ -492,11 +495,7 @@ impl SessionActor {
             return;
         };
 
-        let parent_prompt_id = self
-            .current_prompt_id
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
+        let parent_prompt_id = self.current_prompt_id.lock().ok().and_then(|g| g.clone());
         let cwd = Some(self.session_info.cwd.clone());
         let parent_session_id = self.session_info.id.0.to_string();
 
@@ -598,8 +597,7 @@ impl SessionActor {
                 if next_briefs.is_empty() {
                     break;
                 }
-                current_planned =
-                    crate::session::effort_team::plan_pending_slots(next_briefs);
+                current_planned = crate::session::effort_team::plan_pending_slots(next_briefs);
                 // Pre-bind replace slots.
                 for p in &current_planned {
                     let _ = tracker.record_outcome(
@@ -665,6 +663,15 @@ impl SessionActor {
             }
             self.push_system_reminder_with_tag(&body, self.reminder_wrapper_tag());
 
+            // Post-run cost/time footer for operator calibration (issue #8).
+            {
+                let mut tracker = self.effort_mode.lock();
+                if let Some(foot) = tracker.take_run_footer_message() {
+                    drop(tracker);
+                    self.push_system_reminder_with_tag(&foot, self.reminder_wrapper_tag());
+                }
+            }
+
             tracing::info!(
                 session_id = %self.session_info.id.0,
                 mode = mode.as_str(),
@@ -686,7 +693,16 @@ impl SessionActor {
                 progress = %label,
                 "effort mode: team aborted to partial report"
             );
+            let foot = tracker.take_run_footer_message();
             drop(tracker);
+            if let Some(foot) = foot {
+                self.push_system_reminder_with_tag(
+                    &format!(
+                        "Team aborted at {label} — not a full-team success. Abort control: /normal (already applied) or cancel mid-run. {foot}"
+                    ),
+                    self.reminder_wrapper_tag(),
+                );
+            }
             self.persist_effort_mode_state();
             self.emit_effort_chrome_update();
         }

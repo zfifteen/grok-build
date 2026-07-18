@@ -1,6 +1,6 @@
-use std::process::Command;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
@@ -37,7 +37,7 @@ fn main() {
         for entry in fs::read_dir(src_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "md") {
+            if path.extension().is_some_and(|e| e == "md") {
                 let content = fs::read_to_string(&path).unwrap();
 
                 // Structured replacements for Power Grok branding (B9).

@@ -1693,7 +1693,11 @@ impl SessionPersistence {
                     }
                 }
                 PersistenceMsg::EffortModeState(state) => {
-                    if let Err(e) = self.storage.write_effort_mode_state(&self.info, &state).await {
+                    if let Err(e) = self
+                        .storage
+                        .write_effort_mode_state(&self.info, &state)
+                        .await
+                    {
                         tracing::warn!(?e, "failed to write effort mode state");
                     }
                 }

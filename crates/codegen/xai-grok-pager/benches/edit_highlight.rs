@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 //! Criterion benchmarks: edit-diff syntax-highlight strategy costs.
 //!
 //! | Strategy | What runs |

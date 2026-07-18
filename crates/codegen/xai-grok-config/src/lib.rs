@@ -16,12 +16,12 @@
 pub mod campaigns;
 pub mod config_override;
 pub mod fs_atomic;
+pub mod install_status;
 mod loader;
 mod macos_managed;
 mod managed_cache;
 mod paths;
 pub mod project_bootstrap;
-pub mod install_status;
 pub mod shell;
 pub mod signed_policy;
 mod validation;
@@ -31,6 +31,11 @@ pub mod version_overrides;
 // reachable via the `pub mod` paths for in-crate use without widening the API.
 pub use campaigns::{
     CampaignEntry, CampaignOverrides, filter_active_campaigns, ids_touching_paths,
+};
+pub use install_status::{
+    InstallVersionStamp, config_has_auto_update_false, config_has_auto_update_key,
+    current_install_version, format_install_status_report, prev_binary_beside_current_exe,
+    read_install_version_file, version_path_beside_current_exe,
 };
 pub use loader::{
     CampaignsState, ConfigLayers, MANAGED_CONFIG_FILENAME, ManagedConfigLayer,
@@ -57,14 +62,9 @@ pub use paths::{
     user_grok_home,
 };
 pub use project_bootstrap::{
-    assess_project_bootstrap, bootstrap_copy_all, bootstrap_copy_categories,
-    bootstrap_start_empty, format_bootstrap_status, run_bootstrap_command, BootstrapReport,
-    BootstrapStatus, BOOTSTRAP_CATEGORIES,
-};
-pub use install_status::{
-    config_has_auto_update_false, config_has_auto_update_key, current_install_version,
-    format_install_status_report, prev_binary_beside_current_exe, read_install_version_file,
-    version_path_beside_current_exe, InstallVersionStamp,
+    BOOTSTRAP_CATEGORIES, BootstrapReport, BootstrapStatus, assess_project_bootstrap,
+    bootstrap_copy_all, bootstrap_copy_categories, bootstrap_start_empty, format_bootstrap_status,
+    run_bootstrap_command,
 };
 
 // Always compiled so call sites can use product_name() without feature-gated

@@ -1,3 +1,4 @@
+#![allow(clippy::single_range_in_vec_init)]
 #![cfg_attr(rustfmt, rustfmt::skip)]
 use super::*;
 use xai_grok_shell::extensions::billing::{BillingConfig, Cent, UsagePeriod};

@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Instant;
 
 // ── Feature flag ───────────────────────────────────────────────────────────
 
@@ -74,6 +75,147 @@ impl EffortMode {
     pub fn is_elevated(self) -> bool {
         !matches!(self, Self::Normal)
     }
+
+    /// Relative cost/time class vs a single Normal analytic pass (approximate).
+    ///
+    /// Not dollars — metering is incomplete. Labels must stay approximate.
+    pub fn cost_class(self) -> EffortCostClass {
+        match self {
+            Self::Normal => EffortCostClass::Normal,
+            Self::Expert => EffortCostClass::ExpertMulti,
+            Self::Heavy => EffortCostClass::HeavyMulti,
+        }
+    }
+}
+
+/// Approximate relative cost/time class for operator transparency (issue #8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffortCostClass {
+    Normal,
+    /// ~N=4 analytic specialists + leader synthesis.
+    ExpertMulti,
+    /// ~N=16 analytic specialists + leader synthesis — slow & costly.
+    HeavyMulti,
+}
+
+impl EffortCostClass {
+    pub fn relative_multiplier(self) -> u32 {
+        match self {
+            Self::Normal => 1,
+            Self::ExpertMulti => 4,
+            Self::HeavyMulti => 16,
+        }
+    }
+
+    /// Short operator-facing class label (never claims exact $).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "≈1× Normal analytic pass",
+            Self::ExpertMulti => "≈4× analytic pass (Expert team — multi-agent)",
+            Self::HeavyMulti => "≈16× analytic pass (Heavy team — slow & costly)",
+        }
+    }
+}
+
+/// Default join-all floor from tech-spec §6 (ms). Soft — not a hard kill.
+pub const EFFORT_JOIN_TIMEOUT_FLOOR_MS: u64 = 300_000;
+
+/// Soft budget env: max specialist N before a **warn-only** preflight note.
+/// Unset / invalid → no soft-budget warning. Never crashes the session.
+pub const EFFORT_SOFT_BUDGET_N_ENV: &str = "GROK_EFFORT_SOFT_BUDGET_N";
+
+/// Parse soft budget N from env; illegal values clamp to `None` (no warn).
+pub fn soft_budget_n_from_env() -> Option<usize> {
+    let v = std::env::var(EFFORT_SOFT_BUDGET_N_ENV).ok()?;
+    let n: usize = v.trim().parse().ok()?;
+    if n == 0 {
+        return None;
+    }
+    // Clamp absurd values so misconfig cannot hard-fail product paths.
+    Some(n.min(10_000))
+}
+
+/// Format compact elapsed wall time for chrome / footers.
+pub fn format_elapsed_compact(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 {
+            format!("{m}m")
+        } else {
+            format!("{m}m{s:02}s")
+        }
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        format!("{h}h{m:02}m")
+    }
+}
+
+/// Operator-visible pre-flight summary before a multi-agent fan-out (issue #8).
+///
+/// Returns `None` for Normal (no scary Heavy chrome on Normal/waived paths).
+pub fn format_effort_preflight(mode: EffortMode) -> Option<String> {
+    let n = mode.team_size_default()?;
+    let class = mode.cost_class();
+    let join_floor_s = EFFORT_JOIN_TIMEOUT_FLOOR_MS / 1000;
+    let mut lines = vec![
+        format!(
+            "**Effort pre-flight:** sticky **{mode}** will run a **multi-agent** fixed team of **N={n}** specialists (plus leader synthesis).",
+            mode = match mode {
+                EffortMode::Expert => "Expert",
+                EffortMode::Heavy => "Heavy",
+                EffortMode::Normal => return None,
+            }
+        ),
+        format!("Relative cost/time class (approximate, not $): {}", class.label()),
+        format!(
+            "Join-all timeout floor ≈ {join_floor_s}s per tech-spec (wall clock can be longer with replace waves)."
+        ),
+        "Live chrome shows **S of N** + elapsed while pursuing. **Abort:** `/normal` (or cancel) — partial S of N, never a full-team success claim.".to_string(),
+    ];
+    if let Some(budget) = soft_budget_n_from_env().filter(|&b| n > b) {
+        lines.push(format!(
+                "**Soft budget warn:** N={n} exceeds GROK_EFFORT_SOFT_BUDGET_N={budget} (warn only — session continues)."
+            ));
+    }
+
+    if mode == EffortMode::Heavy {
+        lines.push(
+            "First Heavy multi-agent team this session still needs `--confirm` (or GROK_HEAVY_AUTO_CONFIRM=1)."
+                .into(),
+        );
+    }
+    Some(lines.join("\n"))
+}
+
+/// One-line post-run cost/time footer for calibration (issue #8).
+pub fn format_effort_run_footer(
+    mode: EffortMode,
+    successful: usize,
+    target_n: usize,
+    elapsed_secs: Option<u64>,
+    partial: bool,
+) -> String {
+    let mode_name = match mode {
+        EffortMode::Expert => "Expert",
+        EffortMode::Heavy => "Heavy",
+        EffortMode::Normal => "Normal",
+    };
+    let outcome = if partial {
+        format!("partial {successful} of {target_n}")
+    } else {
+        format!("{successful} of {target_n} specialists")
+    };
+    let elapsed = elapsed_secs
+        .map(|s| format!(" · {}", format_elapsed_compact(s)))
+        .unwrap_or_default();
+    format!(
+        "Effort run: {mode_name} · {outcome}{elapsed} · cost class {} (approx; tokens/$ if metering available elsewhere)",
+        mode.cost_class().label()
+    )
 }
 
 impl std::fmt::Display for EffortMode {
@@ -211,6 +353,14 @@ pub struct EffortModeTracker {
     ledger: Vec<SpecialistLedgerRow>,
     caps: EffortCaps,
     session_dir: PathBuf,
+    /// Wall clock when the current fixed-team run began (live elapsed chrome).
+    team_started_at: Option<Instant>,
+    /// Last completed run duration (post-run footer).
+    last_run_elapsed_secs: Option<u64>,
+    /// Pending one-shot preflight operator message after begin_team_run.
+    pending_preflight: bool,
+    /// Pending one-shot post-run footer after team terminal.
+    pending_run_footer: bool,
 }
 
 impl EffortModeTracker {
@@ -229,6 +379,10 @@ impl EffortModeTracker {
             ledger: Vec::new(),
             caps: EffortCaps::default(),
             session_dir,
+            team_started_at: None,
+            last_run_elapsed_secs: None,
+            pending_preflight: false,
+            pending_run_footer: false,
         }
     }
 
@@ -345,6 +499,7 @@ impl EffortModeTracker {
 
     /// `/normal`: clear mode and cancel team.
     pub fn clear_to_normal(&mut self) {
+        self.finish_team_timer();
         self.cancel_team();
         self.mode = EffortMode::Normal;
         self.solo_waiver = false;
@@ -355,6 +510,7 @@ impl EffortModeTracker {
         self.synthesis_complete = false;
         self.replace_waves_used = 0;
         self.continue_wave_pending = false;
+        self.pending_preflight = false;
         self.ledger.clear();
     }
 
@@ -398,13 +554,10 @@ impl EffortModeTracker {
             .mode
             .team_size_default()
             .ok_or(EffortGateError::IdleInNormal)?;
-        let cfg = crate::session::effort_brains::load_effort_brain_config().map_err(|e| {
-            EffortGateError::BrainConfig(e.to_string())
-        })?;
-        let brain_ids =
-            crate::session::effort_brains::select_brain_ids(&cfg, self.mode).map_err(|e| {
-                EffortGateError::BrainConfig(e.to_string())
-            })?;
+        let cfg = crate::session::effort_brains::load_effort_brain_config()
+            .map_err(|e| EffortGateError::BrainConfig(e.to_string()))?;
+        let brain_ids = crate::session::effort_brains::select_brain_ids(&cfg, self.mode)
+            .map_err(|e| EffortGateError::BrainConfig(e.to_string()))?;
         if brain_ids.len() != n {
             return Err(EffortGateError::BrainConfig(format!(
                 "selected {} brains but mode expects N={n}",
@@ -415,6 +568,9 @@ impl EffortModeTracker {
         self.synthesis_complete = false;
         self.replace_waves_used = 0;
         self.continue_wave_pending = false;
+        self.team_started_at = Some(Instant::now());
+        self.pending_preflight = true;
+        self.pending_run_footer = false;
         self.ledger.clear();
         for (i, brain_id) in brain_ids.into_iter().enumerate() {
             let spec = cfg.get(brain_id.as_str()).ok_or_else(|| {
@@ -425,6 +581,52 @@ impl EffortModeTracker {
             self.ledger.push(row);
         }
         Ok(())
+    }
+
+    /// Stop the team wall clock (abort / synthesis / clear) and stash elapsed.
+    fn finish_team_timer(&mut self) {
+        if let Some(start) = self.team_started_at.take() {
+            self.last_run_elapsed_secs = Some(start.elapsed().as_secs());
+            self.pending_run_footer = true;
+        }
+    }
+
+    /// Live elapsed seconds for the in-flight team run, if any.
+    pub fn team_elapsed_secs(&self) -> Option<u64> {
+        self.team_started_at.map(|t| t.elapsed().as_secs())
+    }
+
+    pub fn last_run_elapsed_secs(&self) -> Option<u64> {
+        self.last_run_elapsed_secs
+    }
+
+    /// Take pending pre-flight operator text (once per begin_team_run).
+    pub fn take_preflight_message(&mut self) -> Option<String> {
+        if !self.pending_preflight {
+            return None;
+        }
+        self.pending_preflight = false;
+        format_effort_preflight(self.mode)
+    }
+
+    /// Take pending post-run footer (once after timer stop).
+    pub fn take_run_footer_message(&mut self) -> Option<String> {
+        if !self.pending_run_footer {
+            return None;
+        }
+        self.pending_run_footer = false;
+        let n = self.target_n().unwrap_or(0);
+        let s = self.successful_count();
+        let partial = !self.synthesis_complete
+            || self.pursuit == PursuitState::PartialReport
+            || (n > 0 && s < n);
+        Some(format_effort_run_footer(
+            self.mode,
+            s,
+            n,
+            self.last_run_elapsed_secs,
+            partial,
+        ))
     }
 
     pub fn record_outcome(
@@ -479,9 +681,7 @@ impl EffortModeTracker {
                 return Err(EffortGateError::NoTeamRun);
             }
         }
-        let n = self
-            .target_n()
-            .ok_or(EffortGateError::IdleInNormal)?;
+        let n = self.target_n().ok_or(EffortGateError::IdleInNormal)?;
         let s = self.successful_count();
         if s < n {
             return Err(EffortGateError::UnderCount {
@@ -688,6 +888,7 @@ impl EffortModeTracker {
         }
         self.pursuit = PursuitState::PartialReport;
         self.continue_wave_pending = false;
+        self.finish_team_timer();
     }
 
     pub fn cancel_team(&mut self) {
@@ -714,6 +915,7 @@ impl EffortModeTracker {
         self.can_claim_full_team()?;
         self.synthesis_complete = true;
         self.pursuit = PursuitState::Idle;
+        self.finish_team_timer();
         Ok(())
     }
 
@@ -723,6 +925,7 @@ impl EffortModeTracker {
         if self.pursuit != PursuitState::Waived {
             self.pursuit = PursuitState::PartialReport;
         }
+        self.finish_team_timer();
     }
 
     /// Execute/write tools allowed only after synthesis for elevated team runs.
@@ -794,9 +997,7 @@ impl EffortModeTracker {
             return Ok(false);
         }
         // Flag-only / unlock-only turns do not open a team (need real task text).
-        if classify_text.trim().is_empty()
-            && !is_hard_stop_continue_request(task_text)
-        {
+        if classify_text.trim().is_empty() && !is_hard_stop_continue_request(task_text) {
             return Ok(false);
         }
         // Hard-stop continue grant (before trivial short-circuit so "continue"
@@ -861,9 +1062,7 @@ impl EffortModeTracker {
         }
         let task_id = task_id.into();
         let row = self.ledger.iter_mut().find(|r| {
-            !r.outside_n
-                && r.task_id.is_none()
-                && matches!(r.status, SpecialistStatus::Pending)
+            !r.outside_n && r.task_id.is_none() && matches!(r.status, SpecialistStatus::Pending)
         })?;
         row.task_id = Some(task_id);
         row.status = SpecialistStatus::Running;
@@ -883,15 +1082,12 @@ impl EffortModeTracker {
 
     /// Whether every fixed-team slot (non outside_n) is terminal.
     pub fn all_fixed_slots_terminal(&self) -> bool {
-        self.ledger
-            .iter()
-            .filter(|r| !r.outside_n)
-            .all(|r| {
-                !matches!(
-                    r.status,
-                    SpecialistStatus::Pending | SpecialistStatus::Running
-                )
-            })
+        self.ledger.iter().filter(|r| !r.outside_n).all(|r| {
+            !matches!(
+                r.status,
+                SpecialistStatus::Pending | SpecialistStatus::Running
+            )
+        })
     }
 
     /// Record a specialist outcome by task_id (production subagent join path).
@@ -905,7 +1101,7 @@ impl EffortModeTracker {
             .iter()
             .find(|r| r.task_id.as_deref() == Some(task_id))
             .map(|r| r.slot)
-            .ok_or_else(|| EffortGateError::UnknownSlot(usize::MAX))?;
+            .ok_or(EffortGateError::UnknownSlot(usize::MAX))?;
         self.record_outcome(slot, status, Some(task_id.to_string()))?;
         // Attempt full-team finalize when every slot is terminal.
         let _ = self.try_finalize_synthesis();
@@ -1048,13 +1244,16 @@ impl EffortModeTracker {
         Some(format!(
             "Effort mode: {mode}. For non-trivial work the shell runs a **mandatory** fixed \
              analytic team of N={n} specialists (join-all) before you synthesize. \
+             Relative cost class (approx, not $): {cost}. \
              {contrarian} Do not claim full-team completion with fewer than N successful \
              specialist reports. Do not re-spawn the fixed team — use the team report package \
              when present. Execute/write only after synthesis; any implementer runs outside N.\
              {plan}{solo}\n\
+             Live chrome shows S of N + elapsed. Abort: /normal (partial S of N — never full-team success).\n\
              Effort mode never enables always-approve/yolo.",
             mode = self.mode.as_str(),
             n = n,
+            cost = self.mode.cost_class().label(),
             contrarian = contrarian,
             plan = plan,
             solo = solo,
@@ -1071,9 +1270,7 @@ impl EffortModeTracker {
             return false;
         }
         self.ledger.iter().any(|r| {
-            !r.outside_n
-                && r.task_id.is_none()
-                && matches!(r.status, SpecialistStatus::Pending)
+            !r.outside_n && r.task_id.is_none() && matches!(r.status, SpecialistStatus::Pending)
         })
     }
 
@@ -1095,9 +1292,7 @@ impl EffortModeTracker {
         self.ledger
             .iter()
             .filter(|r| {
-                !r.outside_n
-                    && r.task_id.is_none()
-                    && matches!(r.status, SpecialistStatus::Pending)
+                !r.outside_n && r.task_id.is_none() && matches!(r.status, SpecialistStatus::Pending)
             })
             .filter_map(|r| {
                 let spec = cfg.get(&r.role).or_else(|| {
@@ -1170,6 +1365,7 @@ impl EffortModeTracker {
             brain_hint: self.chrome_brain_hint(),
             waiver_reason: self.last_waiver,
             resume_notice: self.resume_elevated_notice,
+            elapsed_secs: self.team_elapsed_secs(),
         }
     }
 
@@ -1178,15 +1374,15 @@ impl EffortModeTracker {
         if !self.mode.is_elevated() || self.solo_waiver {
             return None;
         }
-        if let Some(r) = self.ledger.iter().find(|r| {
-            !r.outside_n && matches!(r.status, SpecialistStatus::Running)
-        }) {
+        if let Some(r) = self
+            .ledger
+            .iter()
+            .find(|r| !r.outside_n && matches!(r.status, SpecialistStatus::Running))
+        {
             return Some(r.role.clone());
         }
         if let Some(r) = self.ledger.iter().find(|r| {
-            !r.outside_n
-                && matches!(r.status, SpecialistStatus::Pending)
-                && r.task_id.is_none()
+            !r.outside_n && matches!(r.status, SpecialistStatus::Pending) && r.task_id.is_none()
         }) {
             return Some(r.role.clone());
         }
@@ -1212,6 +1408,8 @@ pub struct EffortChromeState {
     pub brain_hint: Option<String>,
     pub waiver_reason: WaiverReason,
     pub resume_notice: bool,
+    /// Live wall-clock seconds while team is in flight (issue #8).
+    pub elapsed_secs: Option<u64>,
 }
 
 impl EffortChromeState {
@@ -1235,7 +1433,11 @@ pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
         EffortMode::Heavy => "Heavy",
         EffortMode::Normal => return None,
     };
-    let resume = if state.resume_notice { " · resumed" } else { "" };
+    let resume = if state.resume_notice {
+        " · resumed"
+    } else {
+        ""
+    };
 
     // Explicit waiver labels — never fake S of N progress.
     if state.waiver_reason == WaiverReason::NeedsHeavyConfirm {
@@ -1270,6 +1472,17 @@ pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
         PursuitState::Idle | PursuitState::Waived => name.to_string(),
     };
     let base = format!("{base}{resume}");
+    let base = match state.elapsed_secs {
+        Some(secs)
+            if matches!(
+                state.pursuit,
+                PursuitState::Pursuing | PursuitState::Aborting | PursuitState::PartialReport
+            ) =>
+        {
+            format!("{base} · {}", format_elapsed_compact(secs))
+        }
+        _ => base,
+    };
     match &state.brain_hint {
         Some(b)
             if !b.is_empty()
@@ -1438,14 +1651,27 @@ pub fn format_team_report_package(
 pub enum EffortGateError {
     IdleInNormal,
     NoTeamRun,
-    UnderCount { s: usize, n: usize, pursuing: bool },
-    MissingContrarian { s: usize, n: usize },
-    PartialNotFullTeam { s: usize, n: usize },
+    UnderCount {
+        s: usize,
+        n: usize,
+        pursuing: bool,
+    },
+    MissingContrarian {
+        s: usize,
+        n: usize,
+    },
+    PartialNotFullTeam {
+        s: usize,
+        n: usize,
+    },
     WaivedNotFullTeam,
     ExecuteBeforeSynthesis,
     PlanBlocksExecute,
     UnknownSlot(usize),
-    ReplaceCap { slot: usize, cap: u32 },
+    ReplaceCap {
+        slot: usize,
+        cap: u32,
+    },
     ReplaceSuccessForbidden(usize),
     NotHardStopped,
     NoContinueWave,
@@ -1749,13 +1975,18 @@ mod tests {
             Err(EffortGateError::ExecuteBeforeSynthesis)
         ));
         // Next non-trivial turn must not stick: reopen fresh team.
-        assert!(t
-            .on_session_turn_start("architect multi-file auth migration")
-            .unwrap());
+        assert!(
+            t.on_session_turn_start("architect multi-file auth migration")
+                .unwrap()
+        );
         assert_eq!(t.pursuit(), PursuitState::Pursuing);
         assert!(t.needs_mandatory_fanout());
         assert_eq!(t.successful_count(), 0);
-        assert!(t.ledger().iter().all(|r| r.status == SpecialistStatus::Pending));
+        assert!(
+            t.ledger()
+                .iter()
+                .all(|r| r.status == SpecialistStatus::Pending)
+        );
     }
 
     #[test]
@@ -1768,7 +1999,8 @@ mod tests {
         t.record_outcome(1, SpecialistStatus::Failed, None).unwrap();
         t.record_outcome(2, SpecialistStatus::EmptyReport, None)
             .unwrap();
-        t.record_outcome(3, SpecialistStatus::Timeout, None).unwrap();
+        t.record_outcome(3, SpecialistStatus::Timeout, None)
+            .unwrap();
         assert!(t.try_prepare_replace_wave());
         assert_eq!(t.replaceable_slots().len(), 0); // already Pending
         assert!(t.needs_mandatory_fanout());
@@ -1829,10 +2061,7 @@ mod tests {
         // Wave 2: per-slot cap exhausted → forced hard-stop.
         assert!(!t.try_prepare_replace_wave());
         assert!(t.is_hard_stop());
-        assert!(t
-            .on_session_turn_start("continue")
-            .unwrap()
-            == false);
+        assert!(!t.on_session_turn_start("continue").unwrap());
         // continue_wave_pending set; is_hard_stop false until wave launches.
         assert!(!t.is_hard_stop());
         assert!(t.try_prepare_replace_wave()); // consumes continue
@@ -1867,7 +2096,8 @@ mod tests {
         let mut t = EffortModeTracker::new(tmp());
         t.set_mode(EffortMode::Expert, false);
         t.begin_team_run().unwrap();
-        t.record_outcome(0, SpecialistStatus::Timeout, None).unwrap();
+        t.record_outcome(0, SpecialistStatus::Timeout, None)
+            .unwrap();
         t.record_outcome(1, SpecialistStatus::EmptyReport, None)
             .unwrap();
         t.record_outcome(2, SpecialistStatus::Failed, None).unwrap();
@@ -1884,7 +2114,10 @@ mod tests {
         t.begin_team_run().unwrap();
         assert_eq!(t.ledger().len(), 16);
         let contrarian_n = t.ledger().iter().filter(|r| r.is_contrarian).count();
-        assert!(contrarian_n >= 1, "Heavy roster needs ≥1 contrarian-class brain");
+        assert!(
+            contrarian_n >= 1,
+            "Heavy roster needs ≥1 contrarian-class brain"
+        );
         // Success on all non-contrarian slots only.
         for row in t.ledger.clone() {
             if !row.is_contrarian {
@@ -1898,7 +2131,8 @@ mod tests {
         assert_eq!(t.successful_count(), 16 - contrarian_n);
         assert!(matches!(
             t.can_claim_full_team(),
-            Err(EffortGateError::UnderCount { .. }) | Err(EffortGateError::MissingContrarian { .. })
+            Err(EffortGateError::UnderCount { .. })
+                | Err(EffortGateError::MissingContrarian { .. })
         ));
         // Fix all contrarian slots.
         for row in t.ledger.clone() {
@@ -1991,9 +2225,10 @@ mod tests {
     fn session_hooks_begin_abort_claim() {
         let mut t = EffortModeTracker::new(tmp());
         t.set_mode(EffortMode::Expert, false);
-        assert!(t
-            .on_session_turn_start("architect multi-file auth migration")
-            .unwrap());
+        assert!(
+            t.on_session_turn_start("architect multi-file auth migration")
+                .unwrap()
+        );
         assert_eq!(t.pursuit(), PursuitState::Pursuing);
         assert_eq!(t.ledger().len(), 4);
         t.on_session_specialist_outcome(0, SpecialistStatus::Success, Some("t0".into()))
@@ -2201,6 +2436,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::None,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             None
         );
@@ -2216,6 +2452,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::None,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             Some("Expert".into())
         );
@@ -2231,6 +2468,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::None,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             Some("Expert 2 of 4".into())
         );
@@ -2244,6 +2482,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::None,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             Some("Heavy 12 of 16".into())
         );
@@ -2259,6 +2498,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::None,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             Some("Heavy Partial 3 of 16".into())
         );
@@ -2272,6 +2512,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::Trivial,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             Some("Expert Trivial".into())
         );
@@ -2285,6 +2526,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::Solo,
                 resume_notice: false,
+                elapsed_secs: None,
             }),
             Some("Expert Solo".into())
         );
@@ -2298,6 +2540,7 @@ mod tests {
                 brain_hint: None,
                 waiver_reason: WaiverReason::NeedsHeavyConfirm,
                 resume_notice: true,
+                elapsed_secs: None,
             }),
             Some("Heavy · confirm first team · resumed".into())
         );
@@ -2308,17 +2551,11 @@ mod tests {
         assert_eq!(t.chrome_state().status_label().as_deref(), Some("Expert"));
         t.begin_team_run().unwrap();
         let label0 = t.chrome_state().status_label().unwrap();
-        assert!(
-            label0.starts_with("Expert 0 of 4"),
-            "got {label0}"
-        );
+        assert!(label0.starts_with("Expert 0 of 4"), "got {label0}");
         t.record_outcome(0, SpecialistStatus::Success, Some("a".into()))
             .unwrap();
         let label1 = t.chrome_state().status_label().unwrap();
-        assert!(
-            label1.starts_with("Expert 1 of 4"),
-            "got {label1}"
-        );
+        assert!(label1.starts_with("Expert 1 of 4"), "got {label1}");
         t.clear_to_normal();
         assert_eq!(t.chrome_state().status_label(), None);
     }
@@ -2329,7 +2566,9 @@ mod tests {
         assert!(is_trivial_task("thanks"));
         assert!(!is_trivial_task("architect multi-file migration of auth"));
         assert!(!is_trivial_task("security audit of the sandbox"));
-        assert!(!is_trivial_task("performance investigation of the hot path"));
+        assert!(!is_trivial_task(
+            "performance investigation of the hot path"
+        ));
     }
 
     #[test]
@@ -2341,9 +2580,7 @@ mod tests {
         assert_eq!(t.last_waiver(), WaiverReason::Trivial);
         assert_eq!(t.pursuit(), PursuitState::Waived);
         // Force team on a trivial-looking message.
-        assert!(t
-            .on_session_turn_start("--force-team fix typo")
-            .unwrap());
+        assert!(t.on_session_turn_start("--force-team fix typo").unwrap());
         assert_eq!(t.pursuit(), PursuitState::Pursuing);
         assert_eq!(t.last_waiver(), WaiverReason::None);
         assert_eq!(t.target_n(), Some(4));
@@ -2368,22 +2605,21 @@ mod tests {
             let _ = t.take_resume_elevated_notice();
         }
         assert!(!t.heavy_unlocked());
-        assert!(!t
-            .on_session_turn_start("architect multi-file auth migration")
-            .unwrap());
+        assert!(
+            !t.on_session_turn_start("architect multi-file auth migration")
+                .unwrap()
+        );
         assert_eq!(t.last_waiver(), WaiverReason::NeedsHeavyConfirm);
         assert!(
-            t.chrome_state()
-                .status_label()
-                .unwrap()
-                .contains("confirm"),
+            t.chrome_state().status_label().unwrap().contains("confirm"),
             "{:?}",
             t.chrome_state().status_label()
         );
         // Confirm unlocks and starts team.
-        assert!(t
-            .on_session_turn_start("--confirm architect multi-file auth migration")
-            .unwrap());
+        assert!(
+            t.on_session_turn_start("--confirm architect multi-file auth migration")
+                .unwrap()
+        );
         assert!(t.heavy_unlocked());
         assert_eq!(t.pursuit(), PursuitState::Pursuing);
 
@@ -2420,5 +2656,67 @@ mod tests {
         let s = parse_effort_turn_flags("--solo --force-team x");
         assert!(s.solo);
         assert!(!s.force_team); // solo wins
+    }
+
+    #[test]
+    fn preflight_shows_n_and_cost_class_not_normal() {
+        assert!(format_effort_preflight(EffortMode::Normal).is_none());
+        let e = format_effort_preflight(EffortMode::Expert).unwrap();
+        assert!(e.contains("N=4"), "{e}");
+        assert!(e.contains("multi-agent"), "{e}");
+        assert!(e.contains("≈4×"), "{e}");
+        assert!(e.contains("Abort"), "{e}");
+        let h = format_effort_preflight(EffortMode::Heavy).unwrap();
+        assert!(h.contains("N=16"), "{h}");
+        assert!(h.contains("≈16×"), "{h}");
+        assert!(h.contains("--confirm"), "{h}");
+    }
+
+    #[test]
+    fn elapsed_compact_and_run_footer() {
+        assert_eq!(format_elapsed_compact(12), "12s");
+        assert_eq!(format_elapsed_compact(65), "1m05s");
+        assert_eq!(format_elapsed_compact(120), "2m");
+        let f = format_effort_run_footer(EffortMode::Expert, 4, 4, Some(125), false);
+        assert!(f.contains("Expert"), "{f}");
+        assert!(f.contains("4 of 4"), "{f}");
+        assert!(f.contains("2m05s"), "{f}");
+        assert!(f.contains("approx"), "{f}");
+        let p = format_effort_run_footer(EffortMode::Heavy, 3, 16, Some(40), true);
+        assert!(p.contains("partial 3 of 16"), "{p}");
+    }
+
+    #[test]
+    fn begin_team_sets_timer_and_preflight_take_once() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        t.begin_team_run().unwrap();
+        assert!(t.team_elapsed_secs().is_some());
+        let label = t.chrome_state().status_label().unwrap();
+        assert!(label.contains("of 4"), "{label}");
+        // elapsed present as · Ns or · 0s
+        assert!(label.contains('·'), "{label}");
+        let msg = t.take_preflight_message().unwrap();
+        assert!(msg.contains("N=4"));
+        assert!(t.take_preflight_message().is_none());
+        t.mark_partial_synthesis();
+        assert!(t.team_elapsed_secs().is_none());
+        let foot = t.take_run_footer_message().unwrap();
+        assert!(foot.contains("partial") || foot.contains("of"), "{foot}");
+        assert!(t.take_run_footer_message().is_none());
+    }
+
+    #[test]
+    fn soft_budget_env_warns_without_panic() {
+        let prev = std::env::var(EFFORT_SOFT_BUDGET_N_ENV).ok();
+        unsafe { std::env::set_var(EFFORT_SOFT_BUDGET_N_ENV, "2") };
+        let e = format_effort_preflight(EffortMode::Expert).unwrap();
+        assert!(e.contains("Soft budget warn"), "{e}");
+        unsafe { std::env::set_var(EFFORT_SOFT_BUDGET_N_ENV, "not-a-number") };
+        assert_eq!(soft_budget_n_from_env(), None);
+        match prev {
+            Some(v) => unsafe { std::env::set_var(EFFORT_SOFT_BUDGET_N_ENV, v) },
+            None => unsafe { std::env::remove_var(EFFORT_SOFT_BUDGET_N_ENV) },
+        }
     }
 }

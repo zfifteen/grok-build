@@ -27,10 +27,7 @@ impl SessionActor {
                 self.apply_effort_mode(mode, solo, force_team, confirm_heavy);
                 ok_end_turn(0, None)
             }
-            BuiltinAction::SetEffortMode {
-                task: Some(_),
-                ..
-            } => {
+            BuiltinAction::SetEffortMode { task: Some(_), .. } => {
                 unreachable!("SetEffortMode with task is intercepted in handle_prompt")
             }
             BuiltinAction::SetYolo { enabled } => {

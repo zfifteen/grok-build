@@ -2,9 +2,9 @@
 
 use super::error::EffortBrainError;
 use super::types::{BrainId, EffortBrainConfig, RosterSelection};
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::SeedableRng;
 
 /// Env var for deterministic Expert draws (plan F10).
 pub const EFFORT_BRAIN_SEED_ENV: &str = "GROK_EFFORT_BRAIN_SEED";

@@ -1,3 +1,4 @@
+#![allow(clippy::possible_missing_else)]
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -3065,7 +3066,8 @@ mod tests {
         assert!(
             matches!(response, ServerMessage::ControlResult { request_id, result :
             Ok(ControlPayload::CpuProfileStatus { active : false, stopping : false,
-            started_at : None, svg_path : None, frequency_hz : None, }), } if request_id
+            started_at : None, svg_path : None, frequency_hz : None, }), }
+if request_id
             == "status-1")
         );
         assert!(

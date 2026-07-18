@@ -115,10 +115,7 @@ pub fn format_bootstrap_status(status: &BootstrapStatus) -> String {
         status.product_dirname
     ));
     lines.push(format!("  .grok/ present: {}", status.official_present));
-    lines.push(format!(
-        "  .powergrok/ present: {}",
-        status.power_present
-    ));
+    lines.push(format!("  .powergrok/ present: {}", status.power_present));
 
     if !status.is_powergrok {
         lines.push(String::new());
@@ -136,9 +133,7 @@ pub fn format_bootstrap_status(status: &BootstrapStatus) -> String {
             "`.powergrok/` already exists. Power Grok reads only that tree (D7 — no merge with `.grok/`)."
                 .to_string(),
         );
-        lines.push(
-            "Optional: compare names only; do not expect runtime merge.".to_string(),
-        );
+        lines.push("Optional: compare names only; do not expect runtime merge.".to_string());
         return lines.join("\n");
     }
 
@@ -170,11 +165,11 @@ pub fn format_bootstrap_status(status: &BootstrapStatus) -> String {
     lines.push("Opt-in actions (nothing runs without --confirm):".to_string());
     lines.push("  /bootstrap-project --preview".to_string());
     lines.push("  /bootstrap-project --copy-all --confirm".to_string());
-    lines.push(
-        "  /bootstrap-project --copy skills,hooks,config.toml --confirm".to_string(),
-    );
+    lines.push("  /bootstrap-project --copy skills,hooks,config.toml --confirm".to_string());
     lines.push("  /bootstrap-project --empty --confirm".to_string());
-    lines.push("  /bootstrap-project --not-now   (dismiss this tip; G4 stays once/process)".to_string());
+    lines.push(
+        "  /bootstrap-project --not-now   (dismiss this tip; G4 stays once/process)".to_string(),
+    );
     lines.push(String::new());
     lines.push(
         "After copy: if `.powergrok/` is personal-only, add it to .gitignore \
@@ -182,8 +177,7 @@ pub fn format_bootstrap_status(status: &BootstrapStatus) -> String {
             .to_string(),
     );
     lines.push(
-        "Docs: docs/powergrok/BUILD_PLAN.md §7.2–§7.3 (empty layer + migration)."
-            .to_string(),
+        "Docs: docs/powergrok/BUILD_PLAN.md §7.2–§7.3 (empty layer + migration).".to_string(),
     );
     lines.join("\n")
 }
@@ -346,9 +340,7 @@ pub fn bootstrap_copy_categories(
         };
         if meta.file_type().is_symlink() {
             skipped.push(name.to_string());
-            notes.push(format!(
-                "skipped symlink category (not followed): {name}"
-            ));
+            notes.push(format!("skipped symlink category (not followed): {name}"));
             continue;
         }
         if dest.exists() {
@@ -397,18 +389,14 @@ pub fn bootstrap_copy_categories(
         if !dest_existed {
             let _ = remove_dir_if_empty(&dest_root);
         }
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "no categories copied; .powergrok/ not left empty. skipped: {}",
-                skipped.join(", ")
-            ),
-        ));
+        return Err(io::Error::other(format!(
+            "no categories copied; .powergrok/ not left empty. skipped: {}",
+            skipped.join(", ")
+        )));
     }
 
     notes.push(
-        "Selective copy complete. Power Grok still does not read project .grok/ at runtime."
-            .into(),
+        "Selective copy complete. Power Grok still does not read project .grok/ at runtime.".into(),
     );
     notes.push("gitignore tip (manual): echo .powergrok/ >> .gitignore  # if personal-only".into());
     if !skipped_links.is_empty() {

@@ -908,7 +908,8 @@ impl SessionActor {
         // both demand non-writing). Read/bash/MCP still flow through.
         if matches!(access_kind, AccessKind::Edit(_)) {
             let plan_active = self.plan_mode.lock().is_active();
-            if let Err(gate_err) = self.effort_mode.lock().may_execute_writes(plan_active) {
+            let gate_result = self.effort_mode.lock().may_execute_writes(plan_active);
+            if let Err(gate_err) = gate_result {
                 tracing::info_span!(
                     "tool.decision",
                     tool_name = %call.function.name,

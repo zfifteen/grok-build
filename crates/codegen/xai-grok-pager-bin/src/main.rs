@@ -1,3 +1,4 @@
+#![allow(clippy::possible_missing_else)]
 #![allow(
     unused_imports,
     unused_variables,
@@ -29,6 +30,7 @@ use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
 use tokio_util::sync::CancellationToken;
+use xai_grok_config::product_name;
 use xai_grok_pager::app::{
     AgentCmd, Command, HeadlessArgs, LeaderMgmtArgs, LeaderMgmtCommand, LeaderTargetArgs,
     PagerArgs, join_early_prefetch, resolve_use_leader,
@@ -45,7 +47,6 @@ use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
 use xai_grok_update::{UpdateConfig, auto_update, enforce_minimum_version_or_exit};
-use xai_grok_config::product_name;
 /// Apply headless args to an existing config, only overriding values that are
 /// explicitly set. This allows environment defaults to be preserved when
 /// specific args are not provided.
