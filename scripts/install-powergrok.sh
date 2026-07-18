@@ -22,6 +22,9 @@ DO_INSTALL_COMPLETIONS=1
 DRY_RUN=0
 UNINSTALL=0
 PURGE_HOME=0
+SHOW_STATUS=0
+DO_ROLLBACK=0
+CHECK_FRESHNESS=0
 PREFIX="${HOME}/.local"
 GROK_HOME_OPT="${HOME}/.powergrok"
 REPO_ROOT=""
@@ -40,28 +43,37 @@ usage() {
   cat <<'EOF'
 Usage: scripts/install-powergrok.sh [options]
 
-One-command Power Grok install (side-by-side with official grok).
+One-command Power Grok install + source-build lifecycle (side-by-side with official grok).
 
-Options:
-  --build                 Build release artifact before install (default)
-  --no-build              Skip cargo build; require existing target/release/xai-grok-pager
-  --prefix DIR            Install prefix (default: $HOME/.local); normalized to absolute
-  --grok-home DIR         Power Grok user home / GROK_HOME (default: $HOME/.powergrok); absolute
+Install / upgrade (default):
+  ./scripts/install-powergrok.sh
+  # Re-run after `git pull origin powergrok` to upgrade; keeps wrapper/home;
+  # backs up prior binary to powergrok.prev; rewrites VERSION.
+
+Lifecycle:
+  --status                Show install identity (VERSION, paths, auto_update) and exit
+  --check-freshness       With --status: best-effort compare HEAD vs origin/powergrok
+                          (advisory only — never auto-downloads or installs)
+  --rollback              Restore lib binary from powergrok.prev (no cargo, no official updater)
+  --build / --no-build    Build release artifact before install (default: build)
+  --prefix DIR            Install prefix (default: $HOME/.local); absolute
+  --grok-home DIR         Power Grok home / GROK_HOME (default: $HOME/.powergrok)
   --dry-run               Print actions; do not write or build
   --uninstall             Remove wrapper + lib/powergrok (not repo project data)
-  --purge-home            With --uninstall, also remove --grok-home directory
-  --install-completions   Generate completions under GROK_HOME/completions (default)
-  --no-install-completions
+  --purge-home            With --uninstall, also remove --grok-home
+  --install-completions / --no-install-completions
   -h, --help              Show this help
 
 Layout after install:
   $prefix/bin/powergrok              wrapper (sets GROK_HOME, execs named binary)
   $prefix/lib/powergrok/powergrok    real binary (basename = argv0)
+  $prefix/lib/powergrok/powergrok.prev  previous binary after upgrade (rollback source)
   $prefix/lib/powergrok/VERSION      git SHA + build time
   $grok-home/config.toml             seeded once: auto_update = false
 
-Contract: docs/powergrok/BUILD_PLAN.md §5, §8, §9
-Issue:    https://github.com/zfifteen/powergrok/issues/6
+Upgrade runbook: docs/powergrok/LIFECYCLE.md
+Contract:        docs/powergrok/BUILD_PLAN.md §5, §8, §9
+Issues:          #6 install, #14 lifecycle
 EOF
 }
 
@@ -167,6 +179,18 @@ parse_args() {
         UNINSTALL=1
         shift
         ;;
+      --status)
+        SHOW_STATUS=1
+        shift
+        ;;
+      --rollback)
+        DO_ROLLBACK=1
+        shift
+        ;;
+      --check-freshness)
+        CHECK_FRESHNESS=1
+        shift
+        ;;
       --purge-home)
         PURGE_HOME=1
         shift
@@ -187,6 +211,17 @@ parse_args() {
 
   if [[ "${PURGE_HOME}" -eq 1 && "${UNINSTALL}" -ne 1 ]]; then
     die "--purge-home requires --uninstall"
+  fi
+  if [[ "${CHECK_FRESHNESS}" -eq 1 && "${SHOW_STATUS}" -ne 1 ]]; then
+    # Allow standalone freshness as status+freshness.
+    SHOW_STATUS=1
+  fi
+  local modes=0
+  [[ "${UNINSTALL}" -eq 1 ]] && modes=$((modes + 1))
+  [[ "${SHOW_STATUS}" -eq 1 ]] && modes=$((modes + 1))
+  [[ "${DO_ROLLBACK}" -eq 1 ]] && modes=$((modes + 1))
+  if [[ "${modes}" -gt 1 ]]; then
+    die "use only one of --status / --rollback / --uninstall (with optional install flags)"
   fi
 }
 
@@ -572,6 +607,148 @@ uninstall_powergrok() {
   log "uninstall complete (repo project .powergrok/ untouched; official grok untouched)"
 }
 
+print_status() {
+  derive_paths
+  assert_safe_install_path "--prefix" "${PREFIX}"
+  assert_safe_install_path "--grok-home" "${GROK_HOME_OPT}"
+
+  echo "=== Power Grok install status ==="
+  echo "command:      ${PUBLIC_COMMAND_NAME}"
+  echo "wrapper:      ${WRAPPER_PATH}$([[ -x "${WRAPPER_PATH}" ]] && echo " (present)" || echo " (missing)")"
+  echo "real_binary:  ${REAL_BIN_PATH}$([[ -x "${REAL_BIN_PATH}" ]] && echo " (present)" || echo " (missing)")"
+  echo "prev_binary:  ${PREV_BIN_PATH}$([[ -e "${PREV_BIN_PATH}" ]] && echo " (present — rollback available)" || echo " (none)")"
+  echo "VERSION_file: ${VERSION_PATH}"
+  if [[ -f "${VERSION_PATH}" ]]; then
+    if grep -Eq '^state=rolled-back' "${VERSION_PATH}" 2>/dev/null; then
+      echo "  state: rolled-back (restored from powergrok.prev — not a commit SHA)"
+      sed 's/^/  /' "${VERSION_PATH}"
+    else
+      sed 's/^/  /' "${VERSION_PATH}"
+    fi
+  else
+    echo "  (missing — run ./scripts/install-powergrok.sh)"
+  fi
+  echo "GROK_HOME:    ${GROK_HOME_OPT}"
+  local config="${GROK_HOME_OPT}/config.toml"
+  # auto_update check aligned with installer: assignment = false, not substring.
+  if [[ -f "${config}" ]]; then
+    if grep -Eq '^[[:space:]]*auto_update[[:space:]]*=[[:space:]]*false([[:space:]]|#|$)' "${config}"; then
+      echo "auto_update:  false (seed intact)"
+    elif grep -Eq '^[[:space:]]*auto_update[[:space:]]*=' "${config}"; then
+      echo "auto_update:  $(grep -E '^[[:space:]]*auto_update[[:space:]]*=' "${config}" | head -1 | sed 's/^[[:space:]]*//')"
+      echo "  warning: expected auto_update = false for source-built Power Grok"
+    else
+      echo "auto_update:  (not set in config.toml)"
+    fi
+  else
+    echo "auto_update:  (no config.toml yet)"
+  fi
+  echo "project_dir:  .powergrok when argv0 is powergrok (D7 isolation)"
+  echo "official_grok: $(command -v grok 2>/dev/null || echo '(not on PATH — OK)')"
+  echo
+  echo "Upgrade:   git pull origin powergrok && ./scripts/install-powergrok.sh"
+  echo "Rollback:  ./scripts/install-powergrok.sh --rollback"
+  echo "Runbook:   docs/powergrok/LIFECYCLE.md"
+
+  if [[ "${CHECK_FRESHNESS}" -eq 1 ]]; then
+    echo
+    echo "=== Freshness (advisory only — never auto-installs) ==="
+    echo "note: may run 'git fetch origin powergrok' (updates remote-tracking refs only;"
+    echo "      never downloads or installs Power Grok bits)."
+    echo "note: checkout lag below is repo HEAD vs origin/powergrok — not installed binary vs origin."
+    if [[ -z "${REPO_ROOT}" ]] || [[ ! -d "${REPO_ROOT}/.git" ]]; then
+      soft_resolve_repo_root || true
+    fi
+    if [[ -z "${REPO_ROOT}" ]] || [[ ! -d "${REPO_ROOT}/.git" ]]; then
+      echo "repo: not found near installer; skip remote compare"
+      return 0
+    fi
+    local head remote ahead
+    head="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "repo: ${REPO_ROOT}"
+    echo "checkout_HEAD: ${head}"
+    if git -C "${REPO_ROOT}" rev-parse --verify origin/powergrok >/dev/null 2>&1; then
+      # Best-effort fetch; ignore network failure.
+      if [[ "${DRY_RUN}" -eq 1 ]]; then
+        echo "[dry-run] would: git fetch origin powergrok"
+      else
+        git -C "${REPO_ROOT}" fetch origin powergrok --quiet 2>/dev/null \
+          || echo "fetch: skipped or failed (using existing origin/powergrok tip)"
+      fi
+      remote="$(git -C "${REPO_ROOT}" rev-parse --short origin/powergrok 2>/dev/null || echo unknown)"
+      echo "origin/powergrok: ${remote}"
+      ahead="$(git -C "${REPO_ROOT}" rev-list --count HEAD..origin/powergrok 2>/dev/null || echo "?")"
+      echo "checkout_commits_behind_origin_powergrok: ${ahead}"
+      if [[ "${ahead}" != "0" && "${ahead}" != "?" ]]; then
+        echo "advice: git pull origin powergrok && ./scripts/install-powergrok.sh"
+        echo "(no automatic download or install performed)"
+      else
+        echo "advice: checkout appears current with origin/powergrok (rebuild still optional)"
+      fi
+    else
+      echo "origin/powergrok: not available (fetch remotes first)"
+    fi
+    if [[ -f "${VERSION_PATH}" ]]; then
+      local inst_sha inst_state
+      inst_state="$(grep -E '^state=' "${VERSION_PATH}" | head -1 | cut -d= -f2- || true)"
+      inst_sha="$(grep -E '^git=' "${VERSION_PATH}" | head -1 | cut -d= -f2- || true)"
+      if [[ "${inst_state}" == "rolled-back" || "${inst_sha}" == "rollback-from-prev" || "${inst_sha}" == "(unknown)" ]]; then
+        echo "installed_VERSION: rolled-back from powergrok.prev (not a commit SHA — reinstall after pull)"
+      else
+        echo "installed_VERSION_git: ${inst_sha:-unknown}"
+        if [[ -n "${inst_sha}" && "${inst_sha}" != "unknown" ]]; then
+          local full_head
+          full_head="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)"
+          if [[ -n "${full_head}" && "${inst_sha}" != "${full_head}" ]]; then
+            echo "note: installed binary SHA differs from checkout HEAD — reinstall to refresh binary"
+          fi
+        fi
+      fi
+    fi
+  fi
+}
+
+rollback_powergrok() {
+  derive_paths
+  assert_safe_install_path "--prefix" "${PREFIX}"
+  assert_public_name_is_powergrok
+  assert_does_not_clobber_official_grok
+
+  if [[ ! -e "${PREV_BIN_PATH}" ]]; then
+    die "no previous binary at ${PREV_BIN_PATH}; nothing to roll back"
+  fi
+  if [[ ! -f "${PREV_BIN_PATH}" ]]; then
+    die "previous binary path is not a file: ${PREV_BIN_PATH}"
+  fi
+
+  log "rollback: restore ${PREV_BIN_PATH} → ${REAL_BIN_PATH}"
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    log "would install -m 755 ${PREV_BIN_PATH} ${REAL_BIN_PATH}"
+    log "would rewrite VERSION note for rollback"
+    return 0
+  fi
+
+  mkdir -p "${LIB_DIR}"
+  # Optional one-shot forensics copy of the binary we are leaving (documented in LIFECYCLE.md).
+  if [[ -e "${REAL_BIN_PATH}" ]]; then
+    cp -p "${REAL_BIN_PATH}" "${LIB_DIR}/powergrok.before-rollback" || true
+  fi
+  install -m 755 "${PREV_BIN_PATH}" "${REAL_BIN_PATH}"
+  {
+    echo "state=rolled-back"
+    echo "git=(unknown)"
+    echo "branch=n/a"
+    echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "features=${CARGO_FEATURES}"
+    echo "artifact=powergrok.prev"
+    echo "note=restored from powergrok.prev; re-run installer after git pull for a proper git= SHA"
+  } >"${VERSION_PATH}"
+  log "rollback complete; wrapper and GROK_HOME untouched; official grok untouched"
+  echo "Restored: ${REAL_BIN_PATH}"
+  echo "From:     ${PREV_BIN_PATH}"
+  echo "VERSION:  ${VERSION_PATH} (state=rolled-back — not a commit SHA)"
+}
+
 do_install() {
   resolve_repo_root
   derive_paths
@@ -596,12 +773,38 @@ do_install() {
 main() {
   parse_args "$@"
   if [[ "${UNINSTALL}" -eq 1 ]]; then
-    # Paths come from --prefix / --grok-home; full repo root not required.
     REPO_ROOT="$(pwd)"
     uninstall_powergrok
+  elif [[ "${SHOW_STATUS}" -eq 1 ]]; then
+    soft_resolve_repo_root || true
+    print_status
+  elif [[ "${DO_ROLLBACK}" -eq 1 ]]; then
+    REPO_ROOT="$(pwd)"
+    rollback_powergrok
   else
     do_install
   fi
+}
+
+# Like resolve_repo_root but returns 1 instead of dying (status/freshness).
+soft_resolve_repo_root() {
+  local script_dir root candidate
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  candidate="$(cd "${script_dir}/.." && pwd -P)"
+  if [[ -f "${candidate}/Cargo.toml" && -d "${candidate}/crates/codegen/xai-grok-pager-bin" ]]; then
+    REPO_ROOT="${candidate}"
+    return 0
+  fi
+  root="${candidate}"
+  while [[ "${root}" != "/" ]]; do
+    if [[ -f "${root}/Cargo.toml" && -d "${root}/crates/codegen/xai-grok-pager-bin" ]]; then
+      REPO_ROOT="${root}"
+      return 0
+    fi
+    root="$(cd "${root}/.." && pwd -P)"
+  done
+  REPO_ROOT=""
+  return 1
 }
 
 if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then

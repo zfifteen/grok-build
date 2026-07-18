@@ -201,8 +201,25 @@ powergrok --help
 ```
 
 Useful flags: `--dry-run`, `--no-build`, `--prefix DIR`, `--grok-home DIR`,
+`--status`, `--status --check-freshness`, `--rollback`,
 `--uninstall`, `--purge-home`, `--no-install-completions`.  
-Full contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md) §9.
+Full contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md) §9.  
+**Lifecycle (upgrade / VERSION / rollback):** [`docs/powergrok/LIFECYCLE.md`](docs/powergrok/LIFECYCLE.md).
+
+```sh
+# After day-1 install — upgrade from source:
+git pull origin powergrok
+./scripts/install-powergrok.sh
+./scripts/install-powergrok.sh --status
+
+# Optional advisory (never auto-installs):
+./scripts/install-powergrok.sh --status --check-freshness
+
+# Roll back lib binary to previous install:
+./scripts/install-powergrok.sh --rollback
+```
+
+In-session: **`/install-status`** (alias `/powergrok-status`) shows VERSION identity when running the installed binary.
 
 **Manual steps** (reference only — prefer the installer):
 

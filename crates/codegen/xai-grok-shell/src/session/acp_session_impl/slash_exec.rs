@@ -933,6 +933,11 @@ impl SessionActor {
                 self.send_slash_command_output(&text).await;
                 ok_end_turn(0, None)
             }
+            BuiltinAction::InstallStatus => {
+                let text = xai_grok_config::format_install_status_report();
+                self.send_slash_command_output(&text).await;
+                ok_end_turn(0, None)
+            }
         }
     }
 
