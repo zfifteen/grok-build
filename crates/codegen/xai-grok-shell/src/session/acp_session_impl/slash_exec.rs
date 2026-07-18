@@ -905,6 +905,34 @@ impl SessionActor {
                 self.send_slash_command_output("Goal cleared.").await;
                 ok_end_turn(0, None)
             }
+            BuiltinAction::BootstrapProject { args } => {
+                let cwd = if self.session_info.cwd.is_empty() {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                } else {
+                    std::path::PathBuf::from(&self.session_info.cwd)
+                };
+                // Prefer git worktree root when available so bootstrap is workspace-scoped.
+                let root = git2::Repository::discover(&cwd)
+                    .ok()
+                    .and_then(|r| r.workdir().map(|p| p.to_path_buf()))
+                    .unwrap_or_else(|| cwd.clone());
+                let mut text = xai_grok_config::run_bootstrap_command(&root, &args);
+                // Policy is repo-root bootstrap; note when cwd-local .grok would be missed.
+                if root != cwd
+                    && cwd.join(".grok").is_dir()
+                    && !root.join(".grok").is_dir()
+                    && !args.contains("--confirm")
+                {
+                    text.push_str(&format!(
+                        "\n\nNote: bootstrap targets git root {} (product policy). \
+                         Cwd {} has a local .grok/ that is not used for this command.",
+                        root.display(),
+                        cwd.display()
+                    ));
+                }
+                self.send_slash_command_output(&text).await;
+                ok_end_turn(0, None)
+            }
         }
     }
 

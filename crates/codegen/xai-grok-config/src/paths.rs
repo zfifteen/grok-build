@@ -114,8 +114,9 @@ pub fn take_empty_project_layer_warning(workspace_root: &Path) -> Option<&'stati
     }
     Some(
         "Project config for powergrok uses `.powergrok/` (isolated from `.grok/`). \
-         No `.powergrok/` found; project MCP/skills/hooks are empty until you create it \
-         (optional: `cp -R .grok .powergrok`).",
+         No `.powergrok/` found; project MCP/skills/hooks are empty until you create it. \
+         In-product: `/bootstrap-project` (opt-in copy or --empty). \
+         Manual: `cp -R .grok .powergrok`.",
     )
 }
 
@@ -456,7 +457,10 @@ mod tests {
         // One-shot take: first Some (if latch free) must match G4 copy.
         if let Some(msg) = take_empty_project_layer_warning(root) {
             assert!(msg.contains(".powergrok"), "{msg}");
-            assert!(msg.contains("cp -R .grok .powergrok"), "{msg}");
+            assert!(
+                msg.contains("/bootstrap-project") || msg.contains("cp -R .grok .powergrok"),
+                "{msg}"
+            );
             assert!(
                 take_empty_project_layer_warning(root).is_none(),
                 "G4 must fire at most once per process"

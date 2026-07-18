@@ -161,6 +161,7 @@ Chrome tracks progress with the active brain id (e.g.
 | Auto-update | product default | **off** in Power Grok seed (source-built install stays put) |
 
 Isolation contract: [`docs/powergrok/BUILD_PLAN.md`](docs/powergrok/BUILD_PLAN.md).  
+Empty project layer (`.grok/` present, no `.powergrok/`): **`/bootstrap-project`** (opt-in copy or `--empty`; writes need `--confirm`).  
 Naming: “Power Grok” in prose, `powergrok` for binary and paths —
 [`docs/powergrok/BRANDING_PLAN.md`](docs/powergrok/BRANDING_PLAN.md).
 
