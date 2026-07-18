@@ -353,6 +353,110 @@ test_purge_home_ok() {
   rm -rf "${tmp}"
 }
 
+test_upgrade_creates_prev_and_status() {
+  echo "test_upgrade_creates_prev_and_status"
+  local tmp fake1 fake2 out
+  tmp="$(mktemp -d)"
+  fake1="${tmp}/fake1"
+  fake2="${tmp}/fake2"
+  make_fake_artifact "${fake1}"
+  echo '#!/usr/bin/env bash
+echo "fake2 version"
+if [[ "${1:-}" == "completions" ]]; then exit 0; fi
+exit 0' >"${fake2}"
+  chmod +x "${fake2}"
+
+  POWERGROK_INSTALL_ARTIFACT="${fake1}" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  assert_file "VERSION after first install" "${tmp}/prefix/lib/powergrok/VERSION"
+  assert_file "real binary v1" "${tmp}/prefix/lib/powergrok/powergrok"
+  grep -q '^git=' "${tmp}/prefix/lib/powergrok/VERSION" || {
+    echo "  FAIL VERSION missing git=" >&2
+    FAIL=$((FAIL + 1))
+  }
+  # Second install upgrades and backs up prev
+  POWERGROK_INSTALL_ARTIFACT="${fake2}" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  assert_file "prev binary after upgrade" "${tmp}/prefix/lib/powergrok/powergrok.prev"
+  assert_file "VERSION after upgrade" "${tmp}/prefix/lib/powergrok/VERSION"
+  grep -q 'auto_update = false' "${tmp}/home/config.toml" || {
+    echo "  FAIL auto_update not false after upgrade" >&2
+    FAIL=$((FAIL + 1))
+  }
+  out="$("${INSTALL}" --status --prefix "${tmp}/prefix" --grok-home "${tmp}/home" 2>&1)" || true
+  echo "${out}" | grep -q 'Power Grok install status' || {
+    echo "  FAIL status header missing: ${out}" >&2
+    FAIL=$((FAIL + 1))
+  }
+  echo "${out}" | grep -q 'auto_update' || {
+    echo "  FAIL status missing auto_update" >&2
+    FAIL=$((FAIL + 1))
+  }
+  echo "  PASS upgrade prev + status + auto_update"
+  PASS=$((PASS + 1))
+  rm -rf "${tmp}"
+}
+
+test_rollback_restores_prev() {
+  echo "test_rollback_restores_prev"
+  local tmp fake1 fake2 body
+  tmp="$(mktemp -d)"
+  fake1="${tmp}/fake1"
+  fake2="${tmp}/fake2"
+  echo '#!/usr/bin/env bash
+echo V1
+exit 0' >"${fake1}"
+  chmod +x "${fake1}"
+  echo '#!/usr/bin/env bash
+echo V2
+exit 0' >"${fake2}"
+  chmod +x "${fake2}"
+
+  POWERGROK_INSTALL_ARTIFACT="${fake1}" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  POWERGROK_INSTALL_ARTIFACT="${fake2}" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  body="$("${tmp}/prefix/lib/powergrok/powergrok" 2>&1 || true)"
+  [[ "${body}" == *V2* ]] || {
+    echo "  FAIL expected V2 before rollback got ${body}" >&2
+    FAIL=$((FAIL + 1))
+  }
+  "${INSTALL}" --rollback --prefix "${tmp}/prefix" --grok-home "${tmp}/home" >/dev/null
+  body="$("${tmp}/prefix/lib/powergrok/powergrok" 2>&1 || true)"
+  [[ "${body}" == *V1* ]] || {
+    echo "  FAIL expected V1 after rollback got ${body}" >&2
+    FAIL=$((FAIL + 1))
+  }
+  grep -q 'rollback-from-prev' "${tmp}/prefix/lib/powergrok/VERSION" || {
+    echo "  FAIL VERSION not stamped for rollback" >&2
+    FAIL=$((FAIL + 1))
+  }
+  # official grok path not required; home still has auto_update false
+  grep -q 'auto_update = false' "${tmp}/home/config.toml"
+  echo "  PASS rollback restores prev and stamps VERSION"
+  PASS=$((PASS + 1))
+  rm -rf "${tmp}"
+}
+
+test_freshness_is_advisory() {
+  echo "test_freshness_is_advisory"
+  local tmp out
+  tmp="$(mktemp -d)"
+  make_fake_artifact "${tmp}/fake"
+  POWERGROK_INSTALL_ARTIFACT="${tmp}/fake" \
+    "${INSTALL}" --no-build --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --no-install-completions >/dev/null
+  out="$("${INSTALL}" --status --check-freshness --prefix "${tmp}/prefix" --grok-home "${tmp}/home" --dry-run 2>&1)" || true
+  echo "${out}" | grep -qi 'advisory\|Freshness\|never auto' || {
+    echo "  FAIL freshness output missing advisory language: ${out}" >&2
+    FAIL=$((FAIL + 1))
+  }
+  # dry-run freshness must not remove install
+  assert_file "install survives freshness dry-run" "${tmp}/prefix/lib/powergrok/powergrok"
+  echo "  PASS freshness advisory"
+  PASS=$((PASS + 1))
+  rm -rf "${tmp}"
+}
+
 main() {
   [[ -x "${INSTALL}" ]] || { echo "missing ${INSTALL}" >&2; exit 1; }
   test_usage_exits_zero
@@ -365,6 +469,9 @@ main() {
   test_install_does_not_write_official_home
   test_purge_home_refuses_official
   test_purge_home_ok
+  test_upgrade_creates_prev_and_status
+  test_rollback_restores_prev
+  test_freshness_is_advisory
   echo
   echo "Results: ${PASS} passed, ${FAIL} failed"
   [[ "${FAIL}" -eq 0 ]]

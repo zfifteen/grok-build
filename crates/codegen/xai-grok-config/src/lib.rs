@@ -21,6 +21,7 @@ mod macos_managed;
 mod managed_cache;
 mod paths;
 pub mod project_bootstrap;
+pub mod install_status;
 pub mod shell;
 pub mod signed_policy;
 mod validation;
@@ -59,6 +60,10 @@ pub use project_bootstrap::{
     assess_project_bootstrap, bootstrap_copy_all, bootstrap_copy_categories,
     bootstrap_start_empty, format_bootstrap_status, run_bootstrap_command, BootstrapReport,
     BootstrapStatus, BOOTSTRAP_CATEGORIES,
+};
+pub use install_status::{
+    current_install_version, format_install_status_report, read_install_version_file,
+    version_path_beside_current_exe, InstallVersionStamp,
 };
 
 // Always compiled so call sites can use product_name() without feature-gated

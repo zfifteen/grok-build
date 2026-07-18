@@ -115,6 +115,14 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         },
     },
     BuiltinCommand {
+        name: "install-status",
+        description: "Show Power Grok install identity (VERSION SHA, GROK_HOME, upgrade hints)",
+        argument_hint: None,
+        aliases: &["powergrok-status"],
+        gate: BuiltinGate::AlwaysOn,
+        resolve: |_args| BuiltinAction::InstallStatus,
+    },
+    BuiltinCommand {
         name: "always-approve",
         description: "Toggle always-approve mode (skip all permission prompts)",
         argument_hint: Some("on|off"),
@@ -728,6 +736,8 @@ pub(crate) enum BuiltinAction {
     BootstrapProject {
         args: String,
     },
+    /// Source-build install identity / VERSION (issue #14).
+    InstallStatus,
 }
 
 impl BuiltinAction {
@@ -773,6 +783,7 @@ impl BuiltinAction {
             | BuiltinAction::GoalResume
             | BuiltinAction::GoalClear => "goal",
             BuiltinAction::BootstrapProject { .. } => "bootstrap-project",
+            BuiltinAction::InstallStatus => "install-status",
         }
     }
 
@@ -807,6 +818,7 @@ impl BuiltinAction {
             | BuiltinAction::GoalResume
             | BuiltinAction::GoalClear => false,
             BuiltinAction::BootstrapProject { args } => !args.is_empty(),
+            BuiltinAction::InstallStatus => false,
         }
     }
 }
