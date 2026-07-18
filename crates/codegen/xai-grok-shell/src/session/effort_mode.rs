@@ -793,6 +793,12 @@ impl EffortModeTracker {
             self.last_waiver = WaiverReason::Solo;
             return Ok(false);
         }
+        // Flag-only / unlock-only turns do not open a team (need real task text).
+        if classify_text.trim().is_empty()
+            && !is_hard_stop_continue_request(task_text)
+        {
+            return Ok(false);
+        }
         // Hard-stop continue grant (before trivial short-circuit so "continue"
         // is never treated as a trivial waived turn).
         if is_hard_stop_continue_request(task_text) && self.is_hard_stop() {
@@ -800,7 +806,8 @@ impl EffortModeTracker {
             return Ok(false);
         }
         // First-Heavy confirm gate (before opening N slots).
-        if self.mode == EffortMode::Heavy && !self.heavy_unlocked && !self.force_team {
+        // `--force-team` does **not** bypass unlock (accidental-Heavy protection).
+        if self.mode == EffortMode::Heavy && !self.heavy_unlocked {
             self.pursuit = PursuitState::Waived;
             self.last_waiver = WaiverReason::NeedsHeavyConfirm;
             // Writes stay allowed until operator confirms and a real team runs.
@@ -1231,11 +1238,7 @@ pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
     let resume = if state.resume_notice { " · resumed" } else { "" };
 
     // Explicit waiver labels — never fake S of N progress.
-    if state.waiver_reason == WaiverReason::NeedsHeavyConfirm
-        || (state.solo_waiver == false
-            && state.pursuit == PursuitState::Waived
-            && state.waiver_reason == WaiverReason::NeedsHeavyConfirm)
-    {
+    if state.waiver_reason == WaiverReason::NeedsHeavyConfirm {
         return Some(format!("{name} · confirm first team{resume}"));
     }
     if state.solo_waiver || state.waiver_reason == WaiverReason::Solo {
@@ -1516,25 +1519,51 @@ pub fn parse_effort_turn_flags(args: &str) -> EffortTurnFlags {
             other => rest.push(other),
         }
     }
-    // Natural-language confirm (whole remaining phrase).
     let joined = rest.join(" ");
     let lower = joined.trim().to_ascii_lowercase();
+    // Natural-language confirm-only messages unlock without starting a team.
     if matches!(
         lower.as_str(),
         "confirm heavy" | "confirm" | "yes heavy" | "unlock heavy"
     ) {
         flags.confirm_heavy = true;
-    }
-    flags.task = if joined.trim().is_empty() {
-        None
+        flags.task = None;
     } else {
-        Some(joined)
-    };
+        flags.task = if joined.trim().is_empty() {
+            None
+        } else {
+            Some(joined)
+        };
+    }
     // Conflicting flags: solo wins over force_team.
     if flags.solo {
         flags.force_team = false;
     }
     flags
+}
+
+/// Re-encode flags + task for turn inject so `on_session_turn_start` sees them.
+pub fn encode_effort_turn_text(
+    task: &str,
+    solo: bool,
+    force_team: bool,
+    confirm_heavy: bool,
+) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if solo {
+        parts.push("--solo");
+    }
+    if force_team {
+        parts.push("--force-team");
+    }
+    if confirm_heavy {
+        parts.push("--confirm");
+    }
+    let t = task.trim();
+    if !t.is_empty() {
+        parts.push(t);
+    }
+    parts.join(" ")
 }
 
 /// Strip leading `--solo` tokens from args; return (solo, remaining task).

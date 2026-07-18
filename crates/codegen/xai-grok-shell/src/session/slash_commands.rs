@@ -69,11 +69,13 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         aliases: &[],
         gate: BuiltinGate::EffortMode,
         resolve: |args| {
-            let (solo, task) = crate::session::effort_mode::parse_solo_and_task(args);
+            let flags = crate::session::effort_mode::parse_effort_turn_flags(args);
             BuiltinAction::SetEffortMode {
                 mode: crate::session::effort_mode::EffortMode::Expert,
-                task,
-                solo,
+                task: flags.task,
+                solo: flags.solo,
+                force_team: flags.force_team,
+                confirm_heavy: flags.confirm_heavy,
             }
         },
     },
@@ -89,6 +91,8 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
                 mode: crate::session::effort_mode::EffortMode::Heavy,
                 task: flags.task,
                 solo: flags.solo,
+                force_team: flags.force_team,
+                confirm_heavy: flags.confirm_heavy,
             }
         },
     },
@@ -102,6 +106,8 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
             mode: crate::session::effort_mode::EffortMode::Normal,
             task: None,
             solo: false,
+            force_team: false,
+            confirm_heavy: false,
         },
     },
     BuiltinCommand {
@@ -677,9 +683,13 @@ pub(crate) enum BuiltinAction {
     /// Sticky effort mode (Expert / Heavy / Normal).
     SetEffortMode {
         mode: crate::session::effort_mode::EffortMode,
-        /// Remaining task text after `--solo` strip (empty → mode-only).
+        /// Remaining task text after flag strip (empty → mode-only).
         task: Option<String>,
         solo: bool,
+        /// Force full team this turn (escape trivial waiver).
+        force_team: bool,
+        /// Unlock first Heavy multi-agent spawn this session.
+        confirm_heavy: bool,
     },
     SetYolo {
         enabled: bool,
@@ -790,7 +800,7 @@ impl BuiltinAction {
     pub(crate) fn args_provided(&self) -> bool {
         match self {
             BuiltinAction::Compact { user_context } => user_context.is_some(),
-            BuiltinAction::SetEffortMode { task, solo, .. } => task.is_some() || *solo,
+            BuiltinAction::SetEffortMode { task, solo, force_team, confirm_heavy, .. } => task.is_some() || *solo || *force_team || *confirm_heavy,
             BuiltinAction::SetYolo { .. } => true,
             BuiltinAction::FlushMemory => false,
             BuiltinAction::Dream => false,
@@ -1065,6 +1075,8 @@ pub enum EffortSlashResolve {
         mode: crate::session::effort_mode::EffortMode,
         task: Option<String>,
         solo: bool,
+        force_team: bool,
+        confirm_heavy: bool,
     },
     /// Skill invoke when the effort gate is off and a same-named skill exists.
     Skill { name: String },
@@ -1118,9 +1130,19 @@ pub fn resolve_effort_slash(
         availability,
         SkillSlashRewrite::default(),
     ) {
-        Err(SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode { mode, task, solo })) => {
-            EffortSlashResolve::Builtin { mode, task, solo }
-        }
+        Err(SlashCommandOutcome::Builtin(BuiltinAction::SetEffortMode {
+            mode,
+            task,
+            solo,
+            force_team,
+            confirm_heavy,
+        })) => EffortSlashResolve::Builtin {
+            mode,
+            task,
+            solo,
+            force_team,
+            confirm_heavy,
+        },
         Err(SlashCommandOutcome::InvokeSkill { skills: refs, .. }) => {
             let name = refs
                 .first()
@@ -1436,6 +1458,8 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Expert,
                 task: None,
                 solo: false,
+                force_team: false,
+                confirm_heavy: false,
             })
         ));
         assert!(matches!(
@@ -1444,6 +1468,8 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Expert,
                 task: Some(ref t),
                 solo: false,
+                force_team: false,
+                confirm_heavy: false,
             }) if t == "fix CI"
         ));
     }
@@ -1456,6 +1482,8 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Expert,
                 task: Some(ref t),
                 solo: true,
+                force_team: false,
+                confirm_heavy: false,
             }) if t == "fix the flaky test"
         ));
         assert!(matches!(
@@ -1464,6 +1492,8 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Heavy,
                 task: None,
                 solo: true,
+                force_team: false,
+                confirm_heavy: false,
             })
         ));
     }
@@ -1476,6 +1506,8 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Heavy,
                 task: Some(ref t),
                 solo: false,
+                force_team: false,
+                confirm_heavy: false,
             }) if t == "deep audit"
         ));
         assert!(matches!(
@@ -1484,11 +1516,102 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Normal,
                 task: None,
                 solo: false,
+                force_team: false,
+                confirm_heavy: false,
             })
         ));
     }
 
     #[test]
+    fn heavy_confirm_and_force_team_survive_slash_resolve() {
+        assert!(matches!(
+            resolve_builtin("heavy", "--confirm architect multi-file auth migration"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Heavy,
+                task: Some(ref t),
+                solo: false,
+                force_team: false,
+                confirm_heavy: true,
+            }) if t == "architect multi-file auth migration"
+        ));
+        assert!(matches!(
+            resolve_builtin("heavy", "--force-team fix typo"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Heavy,
+                task: Some(ref t),
+                solo: false,
+                force_team: true,
+                confirm_heavy: false,
+            }) if t == "fix typo"
+        ));
+        assert!(matches!(
+            resolve_builtin("expert", "--force-team rename foo"),
+            Some(BuiltinAction::SetEffortMode {
+                mode: crate::session::effort_mode::EffortMode::Expert,
+                task: Some(ref t),
+                solo: false,
+                force_team: true,
+                confirm_heavy: false,
+            }) if t == "rename foo"
+        ));
+        // Glue: resolve → encode inject → on_session_turn_start unlocks + pursues.
+        let action = resolve_builtin(
+            "heavy",
+            "--confirm architect multi-file auth migration",
+        )
+        .expect("resolve");
+        let BuiltinAction::SetEffortMode {
+            mode,
+            task,
+            solo,
+            force_team,
+            confirm_heavy,
+        } = action
+        else {
+            panic!("not SetEffortMode");
+        };
+        assert_eq!(mode, crate::session::effort_mode::EffortMode::Heavy);
+        let inject = crate::session::effort_mode::encode_effort_turn_text(
+            task.as_deref().unwrap_or(""),
+            solo,
+            force_team,
+            confirm_heavy,
+        );
+        assert!(inject.contains("--confirm"));
+        let prev = std::env::var("GROK_HEAVY_AUTO_CONFIRM").ok();
+        unsafe { std::env::remove_var("GROK_HEAVY_AUTO_CONFIRM") };
+        let mut tracker = crate::session::effort_mode::EffortModeTracker::new(
+            tempfile::tempdir().unwrap().path().to_path_buf(),
+        );
+        tracker.set_mode(mode, solo);
+        if confirm_heavy {
+            tracker.unlock_heavy();
+        }
+        if force_team {
+            tracker.set_force_team(true);
+        }
+        // Force locked if env polluted.
+        if tracker.heavy_unlocked() && !confirm_heavy {
+            let mut snap = tracker.snapshot();
+            snap.heavy_unlocked = false;
+            tracker = crate::session::effort_mode::EffortModeTracker::from_snapshot(
+                tempfile::tempdir().unwrap().path().to_path_buf(),
+                snap,
+            );
+            let _ = tracker.take_resume_elevated_notice();
+        }
+        assert!(tracker.on_session_turn_start(&inject).unwrap());
+        assert!(tracker.heavy_unlocked());
+        assert_eq!(
+            tracker.pursuit(),
+            crate::session::effort_mode::PursuitState::Pursuing
+        );
+        match prev {
+            Some(v) => unsafe { std::env::set_var("GROK_HEAVY_AUTO_CONFIRM", v) },
+            None => unsafe { std::env::remove_var("GROK_HEAVY_AUTO_CONFIRM") },
+        }
+    }
+
     fn effort_builtins_resolve_via_slash_and_shadow_skills() {
         for name in ["expert", "heavy", "normal"] {
             let outcome = resolve(
@@ -1518,6 +1641,7 @@ mod tests {
                 mode: crate::session::effort_mode::EffortMode::Expert,
                 solo: true,
                 task: Some(ref t),
+                ..
             }) if t == "task"
         ));
     }
@@ -1813,6 +1937,8 @@ mod tests {
                 "expert",
                 "heavy",
                 "normal",
+                "bootstrap-project",
+                "install-status",
                 "always-approve",
                 "flush",
                 "dream",

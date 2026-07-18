@@ -788,6 +788,8 @@ impl SessionActor {
         &self,
         mode: crate::session::effort_mode::EffortMode,
         solo: bool,
+        force_team: bool,
+        confirm_heavy: bool,
     ) {
         let previous = self.effort_mode.lock().mode();
         {
@@ -798,6 +800,12 @@ impl SessionActor {
                 tracker.clear_to_normal();
             } else {
                 tracker.set_mode(mode, solo);
+                if confirm_heavy {
+                    tracker.unlock_heavy();
+                }
+                if force_team && !solo {
+                    tracker.set_force_team(true);
+                }
             }
         }
         self.persist_effort_mode_state();
@@ -809,7 +817,7 @@ impl SessionActor {
                 self.push_system_reminder_with_tag(
                     "Heavy is sticky. The **first multi-agent team** this session needs `--confirm` \
                      (or `GROK_HEAVY_AUTO_CONFIRM=1`). Use `--solo` for single-leader turns, \
-                     `--force-team` to override trivial waiver.",
+                     `--force-team` after unlock to override trivial waiver.",
                     self.reminder_wrapper_tag(),
                 );
             }
@@ -819,6 +827,8 @@ impl SessionActor {
             mode = mode.as_str(),
             previous = previous.as_str(),
             solo,
+            force_team,
+            confirm_heavy,
             "effort mode set",
         );
         tracing::info_span!(

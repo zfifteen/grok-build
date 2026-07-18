@@ -335,9 +335,11 @@ impl SessionActor {
                         mode,
                         task: Some(task),
                         solo,
+                        force_team,
+                        confirm_heavy,
                     } => {
                         xai_grok_telemetry::session_ctx::log_event(slash_used);
-                        self.apply_effort_mode(mode, solo);
+                        self.apply_effort_mode(mode, solo, force_team, confirm_heavy);
                         let plan_active = self.plan_mode.lock().is_active();
                         let mut blocks = Vec::new();
                         if let Some(policy) = self.effort_mode.lock().policy_reminder(plan_active) {
@@ -347,13 +349,23 @@ impl SessionActor {
                                 "<system-reminder>\n{policy}\n</system-reminder>"
                             )));
                         }
-                        blocks.push(text_block(task));
+                        // Re-encode flags so turn-start `on_session_turn_start` sees them
+                        // even if apply_effort_mode already applied unlock/force sticky bits.
+                        let inject = crate::session::effort_mode::encode_effort_turn_text(
+                            &task,
+                            solo,
+                            force_team,
+                            confirm_heavy,
+                        );
+                        blocks.push(text_block(inject));
                         blocks
                     }
                     BuiltinAction::SetEffortMode {
                         mode,
                         task: None,
                         solo,
+                        force_team,
+                        confirm_heavy,
                     } => {
                         xai_grok_telemetry::session_ctx::log_event(slash_used);
                         return self
@@ -361,6 +373,8 @@ impl SessionActor {
                                 mode,
                                 task: None,
                                 solo,
+                                force_team,
+                                confirm_heavy,
                             })
                             .await;
                     }
