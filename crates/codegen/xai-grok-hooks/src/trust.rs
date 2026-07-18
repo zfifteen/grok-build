@@ -134,7 +134,7 @@ mod tests {
 
     /// Each test creates its own legacy file in its own temp dir -- no shared state.
     fn trust_file_in(dir: &Path) -> PathBuf {
-        let grok_dir = dir.join(".grok");
+        let grok_dir = xai_grok_config::project_config_dir(dir);
         std::fs::create_dir_all(&grok_dir).unwrap();
         grok_dir.join("trusted-hook-projects")
     }

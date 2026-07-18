@@ -49,7 +49,9 @@ pub use managed_cache::{
 pub use paths::{
     claude_managed_settings_path, claude_managed_settings_probe_path, decode_cwd_from_dirname,
     default_grok_home, encode_cwd_dirname, ensure_sessions_cwd_dir, grok_application,
-    grok_application_in, grok_home, sessions_cwd_dir, system_config_dir, user_grok_home,
+    grok_application_in, grok_home, is_powergrok_project_tree, project_config_dir,
+    project_config_dirname, sessions_cwd_dir, set_project_config_dirname_for_test,
+    system_config_dir, take_empty_project_layer_warning, user_grok_home,
 };
 
 // Always compiled so call sites can use product_name() without feature-gated

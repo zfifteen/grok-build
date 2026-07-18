@@ -65,7 +65,16 @@ fn is_user_grok_config_file(config_path: &Path) -> bool {
 /// user-global config so `cwd == $HOME` does not treat `~/.grok/config.toml` as
 /// a project overlay.
 pub fn find_project_configs(cwd: &Path) -> Vec<PathBuf> {
-    find_project_configs_in(&RepoDirChain::resolve(cwd).dirs)
+    let chain = RepoDirChain::resolve(cwd);
+    let configs = find_project_configs_in(&chain.dirs);
+    // G4: one-shot empty project layer notice (powergrok + .grok present, no .powergrok).
+    // Prefer git root when available so the check is workspace-scoped.
+    let warn_root = chain.dirs.last().map(PathBuf::as_path).unwrap_or(cwd);
+    if let Some(msg) = xai_grok_config::take_empty_project_layer_warning(warn_root) {
+        tracing::info!("{msg}");
+        eprintln!("powergrok: {msg}");
+    }
+    configs
 }
 
 /// [`find_project_configs`] over a precomputed cwd→git-root dir chain
@@ -75,10 +84,11 @@ pub fn find_project_configs(cwd: &Path) -> Vec<PathBuf> {
 pub(crate) fn find_project_configs_in(chain_dirs: &[PathBuf]) -> Vec<PathBuf> {
     // `dirs` is cwd-first; reverse so repo root comes first (lowest priority)
     // and cwd last (highest), matching skills/AGENTS.md discovery order.
+    let dirname = xai_grok_config::project_config_dirname();
     chain_dirs
         .iter()
         .rev()
-        .map(|dir| dir.join(".grok").join("config.toml"))
+        .map(|dir| dir.join(dirname).join("config.toml"))
         .filter(|config_path| config_path.is_file() && !is_user_grok_config_file(config_path))
         .collect()
 }
