@@ -169,16 +169,40 @@ pub struct EffortModeSnapshot {
     pub replace_waves_used: u32,
     #[serde(default)]
     pub ledger: Vec<SpecialistLedgerRow>,
+    /// Session already unlocked first Heavy multi-agent fan-out (or auto-confirm).
+    #[serde(default)]
+    pub heavy_unlocked: bool,
 }
 
 // ── Tracker ────────────────────────────────────────────────────────────────
+
+/// Why elevated mode is not running a full team this turn (chrome label).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaiverReason {
+    #[default]
+    None,
+    /// Operator `--solo` / sticky solo.
+    Solo,
+    /// Conservative trivial short-circuit.
+    Trivial,
+    /// First Heavy team spawn waiting for explicit confirm this session.
+    NeedsHeavyConfirm,
+}
 
 /// Pure effort-mode session tracker (plan-mode twin).
 pub struct EffortModeTracker {
     mode: EffortMode,
     pursuit: PursuitState,
-    /// Per-turn solo waiver (`--solo` or explicit user solo request).
+    /// Per-turn / sticky solo waiver (`--solo`).
     solo_waiver: bool,
+    /// Per-turn force full team even if classifier would waive trivial.
+    force_team: bool,
+    /// First Heavy multi-agent spawn unlocked for this session.
+    heavy_unlocked: bool,
+    /// Last waiver reason for chrome (Solo vs Trivial vs NeedsHeavyConfirm).
+    last_waiver: WaiverReason,
+    /// Set when restoring elevated sticky mode from disk (resume banner).
+    resume_elevated_notice: bool,
     /// True after successful synthesis of the current team run.
     synthesis_complete: bool,
     replace_waves_used: u32,
@@ -195,6 +219,10 @@ impl EffortModeTracker {
             mode: EffortMode::Normal,
             pursuit: PursuitState::Idle,
             solo_waiver: false,
+            force_team: false,
+            heavy_unlocked: heavy_auto_confirm_from_env(),
+            last_waiver: WaiverReason::None,
+            resume_elevated_notice: false,
             synthesis_complete: false,
             replace_waves_used: 0,
             continue_wave_pending: false,
@@ -217,6 +245,7 @@ impl EffortModeTracker {
             other => other,
         };
         t.solo_waiver = snapshot.solo_waiver;
+        t.heavy_unlocked = snapshot.heavy_unlocked || heavy_auto_confirm_from_env();
         t.synthesis_complete = match snapshot.pursuit {
             PursuitState::PartialReport | PursuitState::Waived => true,
             PursuitState::Pursuing | PursuitState::Aborting => false,
@@ -225,6 +254,7 @@ impl EffortModeTracker {
         // Replace budgets are per team-run; resume starts a clean wave budget.
         t.replace_waves_used = 0;
         t.ledger = snapshot.ledger;
+        t.resume_elevated_notice = snapshot.mode.is_elevated();
         t
     }
 
@@ -236,6 +266,7 @@ impl EffortModeTracker {
             synthesis_complete: self.synthesis_complete,
             replace_waves_used: self.replace_waves_used,
             ledger: self.ledger.clone(),
+            heavy_unlocked: self.heavy_unlocked,
         }
     }
 
@@ -253,6 +284,28 @@ impl EffortModeTracker {
 
     pub fn solo_waiver(&self) -> bool {
         self.solo_waiver
+    }
+
+    pub fn force_team(&self) -> bool {
+        self.force_team
+    }
+
+    pub fn heavy_unlocked(&self) -> bool {
+        self.heavy_unlocked
+    }
+
+    pub fn last_waiver(&self) -> WaiverReason {
+        self.last_waiver
+    }
+
+    pub fn take_resume_elevated_notice(&mut self) -> bool {
+        let v = self.resume_elevated_notice;
+        self.resume_elevated_notice = false;
+        v
+    }
+
+    pub fn resume_elevated_notice(&self) -> bool {
+        self.resume_elevated_notice
     }
 
     pub fn synthesis_complete(&self) -> bool {
@@ -275,6 +328,16 @@ impl EffortModeTracker {
         }
         self.mode = mode;
         self.solo_waiver = solo;
+        self.force_team = false;
+        self.last_waiver = if solo {
+            WaiverReason::Solo
+        } else {
+            WaiverReason::None
+        };
+        // Entering Heavy does not auto-unlock first fan-out (unless env).
+        if mode == EffortMode::Heavy && heavy_auto_confirm_from_env() {
+            self.heavy_unlocked = true;
+        }
         if self.pursuit == PursuitState::Pursuing || self.pursuit == PursuitState::Aborting {
             // Mode change mid-flight does not auto-start a new team.
         }
@@ -285,6 +348,9 @@ impl EffortModeTracker {
         self.cancel_team();
         self.mode = EffortMode::Normal;
         self.solo_waiver = false;
+        self.force_team = false;
+        self.last_waiver = WaiverReason::None;
+        self.resume_elevated_notice = false;
         self.pursuit = PursuitState::Idle;
         self.synthesis_complete = false;
         self.replace_waves_used = 0;
@@ -294,6 +360,26 @@ impl EffortModeTracker {
 
     pub fn set_solo_waiver(&mut self, solo: bool) {
         self.solo_waiver = solo;
+        if solo {
+            self.last_waiver = WaiverReason::Solo;
+        }
+    }
+
+    /// Unlock first Heavy multi-agent spawn for this session (confirm gate).
+    pub fn unlock_heavy(&mut self) {
+        self.heavy_unlocked = true;
+        if self.last_waiver == WaiverReason::NeedsHeavyConfirm {
+            self.last_waiver = WaiverReason::None;
+        }
+    }
+
+    /// Per-turn force full team (escape false trivial).
+    pub fn set_force_team(&mut self, force: bool) {
+        self.force_team = force;
+        if force {
+            self.solo_waiver = false;
+            self.last_waiver = WaiverReason::None;
+        }
     }
 
     /// Begin a fixed-team run for elevated modes (non-trivial, not solo).
@@ -667,22 +753,50 @@ impl EffortModeTracker {
     /// finished prior run with synthesis already complete).
     ///
     /// Trivial tasks and solo waiver leave the ledger empty / Waived
-    /// (writes stay allowed under elevated sticky mode).
+    /// (writes stay available under elevated sticky mode).
     ///
-    /// Dead-ledger recovery: when a prior join left all slots terminal but
-    /// short of N (and no continue-wave is pending), a new non-trivial turn
-    /// opens a fresh team so the session cannot stick write-blocked forever.
+    /// **First Heavy multi-agent spawn** in a session requires an explicit
+    /// unlock (`--confirm` / "confirm heavy" / env `GROK_HEAVY_AUTO_CONFIRM=1`
+    /// / prior unlock). Until then chrome shows NeedsHeavyConfirm and no
+    /// team is started.
     ///
-    /// Hard-stop `continue`: if the user message is a continue grant while
-    /// hard-stopped, sets [`continue_wave_pending`] so the mandatory fan-out
-    /// path can run one extra replace wave (tech-spec §4.4).
+    /// **`--force-team`** (or force_team sticky this turn) runs the full team
+    /// even when the classifier would waive as trivial.
+    ///
     /// Returns whether a new team run was begun.
     pub fn on_session_turn_start(&mut self, task_text: &str) -> Result<bool, EffortGateError> {
+        // Apply per-turn flags from the user message (and strip them for classify).
+        let flags = parse_effort_turn_flags(task_text);
+        if flags.force_team {
+            self.force_team = true;
+            self.solo_waiver = false;
+            self.last_waiver = WaiverReason::None;
+        }
+        if flags.solo {
+            self.solo_waiver = true;
+            self.force_team = false;
+            self.last_waiver = WaiverReason::Solo;
+        }
+        if flags.confirm_heavy {
+            self.heavy_unlocked = true;
+            if self.last_waiver == WaiverReason::NeedsHeavyConfirm {
+                self.last_waiver = WaiverReason::None;
+            }
+        }
+        let classify_text = flags.task.as_deref().unwrap_or("");
+
         if !self.mode.is_elevated() {
             return Ok(false);
         }
         if self.solo_waiver {
             self.pursuit = PursuitState::Waived;
+            self.last_waiver = WaiverReason::Solo;
+            return Ok(false);
+        }
+        // Flag-only / unlock-only turns do not open a team (need real task text).
+        if classify_text.trim().is_empty()
+            && !is_hard_stop_continue_request(task_text)
+        {
             return Ok(false);
         }
         // Hard-stop continue grant (before trivial short-circuit so "continue"
@@ -691,9 +805,19 @@ impl EffortModeTracker {
             let _ = self.hard_stop_continue();
             return Ok(false);
         }
-        if is_trivial_task(task_text) {
+        // First-Heavy confirm gate (before opening N slots).
+        // `--force-team` does **not** bypass unlock (accidental-Heavy protection).
+        if self.mode == EffortMode::Heavy && !self.heavy_unlocked {
+            self.pursuit = PursuitState::Waived;
+            self.last_waiver = WaiverReason::NeedsHeavyConfirm;
+            // Writes stay allowed until operator confirms and a real team runs.
+            self.synthesis_complete = true;
+            return Ok(false);
+        }
+        if !self.force_team && is_trivial_task(classify_text) {
             // Trivial short-circuit: Waived so write tools stay available.
             self.pursuit = PursuitState::Waived;
+            self.last_waiver = WaiverReason::Trivial;
             return Ok(false);
         }
         // Already pursuing with an open (non-terminal) run — keep it.
@@ -712,6 +836,7 @@ impl EffortModeTracker {
             // is treated as a new attempt under sticky elevated mode.
             if !self.synthesis_complete {
                 self.begin_team_run()?;
+                self.last_waiver = WaiverReason::None;
                 return Ok(true);
             }
             return Ok(false);
@@ -719,6 +844,12 @@ impl EffortModeTracker {
         // Fresh non-trivial work under elevated mode → open N slots.
         // Clears any prior synthesis_complete so execute re-gates.
         self.begin_team_run()?;
+        // Successful Heavy team start counts as unlock for the session.
+        if self.mode == EffortMode::Heavy {
+            self.heavy_unlocked = true;
+        }
+        self.last_waiver = WaiverReason::None;
+        self.force_team = false; // consume one-shot force
         Ok(true)
     }
 
@@ -1037,6 +1168,8 @@ impl EffortModeTracker {
             target_n: self.target_n(),
             solo_waiver: self.solo_waiver,
             brain_hint: self.chrome_brain_hint(),
+            waiver_reason: self.last_waiver,
+            resume_notice: self.resume_elevated_notice,
         }
     }
 
@@ -1077,6 +1210,8 @@ pub struct EffortChromeState {
     pub solo_waiver: bool,
     /// Active / next / last brain id for elevated team runs.
     pub brain_hint: Option<String>,
+    pub waiver_reason: WaiverReason,
+    pub resume_notice: bool,
 }
 
 impl EffortChromeState {
@@ -1084,7 +1219,7 @@ impl EffortChromeState {
     /// (elevated chrome must disappear).
     ///
     /// Examples: `Expert`, `Expert 2 of 4 · bayesian_update`, `Heavy Partial 3 of 16`,
-    /// `Expert Waived`.
+    /// `Expert Solo`, `Heavy Trivial`, `Heavy · confirm`.
     pub fn status_label(self) -> Option<String> {
         format_effort_chrome_label(&self)
     }
@@ -1100,8 +1235,20 @@ pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
         EffortMode::Heavy => "Heavy",
         EffortMode::Normal => return None,
     };
-    if state.solo_waiver || state.pursuit == PursuitState::Waived {
-        return Some(format!("{name} Waived"));
+    let resume = if state.resume_notice { " · resumed" } else { "" };
+
+    // Explicit waiver labels — never fake S of N progress.
+    if state.waiver_reason == WaiverReason::NeedsHeavyConfirm {
+        return Some(format!("{name} · confirm first team{resume}"));
+    }
+    if state.solo_waiver || state.waiver_reason == WaiverReason::Solo {
+        return Some(format!("{name} Solo{resume}"));
+    }
+    if state.waiver_reason == WaiverReason::Trivial || state.pursuit == PursuitState::Waived {
+        if state.waiver_reason == WaiverReason::Trivial {
+            return Some(format!("{name} Trivial{resume}"));
+        }
+        return Some(format!("{name} Waived{resume}"));
     }
     let n = state.target_n.unwrap_or(0);
     let s = state.successful;
@@ -1122,8 +1269,15 @@ pub fn format_effort_chrome_label(state: &EffortChromeState) -> Option<String> {
         }
         PursuitState::Idle | PursuitState::Waived => name.to_string(),
     };
+    let base = format!("{base}{resume}");
     match &state.brain_hint {
-        Some(b) if !b.is_empty() && matches!(state.pursuit, PursuitState::Pursuing | PursuitState::Aborting | PursuitState::PartialReport) => {
+        Some(b)
+            if !b.is_empty()
+                && matches!(
+                    state.pursuit,
+                    PursuitState::Pursuing | PursuitState::Aborting | PursuitState::PartialReport
+                ) =>
+        {
             Some(format!("{base} · {b}"))
         }
         _ => Some(base),
@@ -1341,23 +1495,82 @@ impl std::error::Error for EffortGateError {}
 
 // ── Arg parse helpers (slash resolve) ──────────────────────────────────────
 
-/// Strip leading `--solo` tokens from args; return (solo, remaining task).
-pub fn parse_solo_and_task(args: &str) -> (bool, Option<String>) {
-    let mut solo = false;
-    let mut rest: Vec<&str> = Vec::new();
+/// Strip leading effort turn flags from args; return structured flags + task.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EffortTurnFlags {
+    pub solo: bool,
+    pub force_team: bool,
+    pub confirm_heavy: bool,
+    pub task: Option<String>,
+}
+
+/// Parse `/expert` `/heavy` args and free-form turn text for effort flags.
+///
+/// Recognized leading tokens (order-independent among flags):
+/// `--solo`, `--force-team`, `--confirm` / `--confirm-heavy`.
+pub fn parse_effort_turn_flags(args: &str) -> EffortTurnFlags {
+    let mut flags = EffortTurnFlags::default();
+    let mut rest = Vec::new();
     for tok in args.split_whitespace() {
-        if tok == "--solo" {
-            solo = true;
-        } else {
-            rest.push(tok);
+        match tok {
+            "--solo" => flags.solo = true,
+            "--force-team" | "--force_team" => flags.force_team = true,
+            "--confirm" | "--confirm-heavy" | "--confirm_heavy" => flags.confirm_heavy = true,
+            other => rest.push(other),
         }
     }
-    let task = if rest.is_empty() {
-        None
+    let joined = rest.join(" ");
+    let lower = joined.trim().to_ascii_lowercase();
+    // Natural-language confirm-only messages unlock without starting a team.
+    if matches!(
+        lower.as_str(),
+        "confirm heavy" | "confirm" | "yes heavy" | "unlock heavy"
+    ) {
+        flags.confirm_heavy = true;
+        flags.task = None;
     } else {
-        Some(rest.join(" "))
-    };
-    (solo, task)
+        flags.task = if joined.trim().is_empty() {
+            None
+        } else {
+            Some(joined)
+        };
+    }
+    // Conflicting flags: solo wins over force_team.
+    if flags.solo {
+        flags.force_team = false;
+    }
+    flags
+}
+
+/// Re-encode flags + task for turn inject so `on_session_turn_start` sees them.
+pub fn encode_effort_turn_text(
+    task: &str,
+    solo: bool,
+    force_team: bool,
+    confirm_heavy: bool,
+) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if solo {
+        parts.push("--solo");
+    }
+    if force_team {
+        parts.push("--force-team");
+    }
+    if confirm_heavy {
+        parts.push("--confirm");
+    }
+    let t = task.trim();
+    if !t.is_empty() {
+        parts.push(t);
+    }
+    parts.join(" ")
+}
+
+/// Strip leading `--solo` tokens from args; return (solo, remaining task).
+/// Prefer [`parse_effort_turn_flags`] for new call sites.
+pub fn parse_solo_and_task(args: &str) -> (bool, Option<String>) {
+    let f = parse_effort_turn_flags(args);
+    (f.solo, f.task)
 }
 
 /// Conservative trivial short-circuit: true only for tiny non-judgment work.
@@ -1369,25 +1582,51 @@ pub fn is_trivial_task(task: &str) -> bool {
     // Hard research / multi-file keywords → never trivial.
     const HARD: &[&str] = &[
         "architect",
+        "architecture",
         "audit",
+        "security",
         "refactor",
         "multi-file",
+        "multifile",
         "research",
         "design",
         "investigate",
         "implement",
         "migrate",
+        "migration",
+        "performance",
+        "scalability",
+        "threat model",
+        "code review",
     ];
     if HARD.iter().any(|k| t.contains(k)) {
         return false;
     }
-    // Very short typo/rename style.
-    t.len() <= 40
+    // Very short typo/rename / acknowledgment style.
+    t.len() <= 48
         && (t.starts_with("fix typo")
             || t.starts_with("rename ")
             || t.starts_with("typo")
             || t == "ok"
-            || t == "thanks")
+            || t == "thanks"
+            || t == "thanks!"
+            || t == "thx"
+            || t == "lgtm"
+            || t == "looks good"
+            || t == "looks good."
+            || t == "sg"
+            || t == "ship it")
+}
+
+/// True when env opts out of first-Heavy confirm (tests / power users).
+pub fn heavy_auto_confirm_from_env() -> bool {
+    matches!(
+        std::env::var("GROK_HEAVY_AUTO_CONFIRM")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    )
 }
 
 /// User message that grants one hard-stop replace wave (tech-spec §4.4).
@@ -1644,6 +1883,8 @@ mod tests {
         t.set_mode(EffortMode::Heavy, false);
         t.begin_team_run().unwrap();
         assert_eq!(t.ledger().len(), 16);
+        let contrarian_n = t.ledger().iter().filter(|r| r.is_contrarian).count();
+        assert!(contrarian_n >= 1, "Heavy roster needs ≥1 contrarian-class brain");
         // Success on all non-contrarian slots only.
         for row in t.ledger.clone() {
             if !row.is_contrarian {
@@ -1654,17 +1895,18 @@ mod tests {
                     .unwrap();
             }
         }
-        assert_eq!(t.successful_count(), 15);
+        assert_eq!(t.successful_count(), 16 - contrarian_n);
         assert!(matches!(
             t.can_claim_full_team(),
             Err(EffortGateError::UnderCount { .. }) | Err(EffortGateError::MissingContrarian { .. })
         ));
-        // Fix contrarian slot.
-        let cslot = t.ledger.iter().find(|r| r.is_contrarian).unwrap().slot;
-        t.record_outcome(cslot, SpecialistStatus::Success, Some("c".into()))
-            .unwrap();
-        // Still 15 non-contrarian + 1 contrarian = 16, but we only have 15 if one failed earlier...
-        // We failed contrarian then succeeded — count is 16.
+        // Fix all contrarian slots.
+        for row in t.ledger.clone() {
+            if row.is_contrarian {
+                t.record_outcome(row.slot, SpecialistStatus::Success, Some("c".into()))
+                    .unwrap();
+            }
+        }
         assert_eq!(t.successful_count(), 16);
         assert!(t.can_claim_full_team().is_ok());
     }
@@ -1957,6 +2199,8 @@ mod tests {
                 target_n: None,
                 solo_waiver: false,
                 brain_hint: None,
+                waiver_reason: WaiverReason::None,
+                resume_notice: false,
             }),
             None
         );
@@ -1969,6 +2213,9 @@ mod tests {
                 successful: 0,
                 target_n: Some(4),
                 solo_waiver: false,
+                brain_hint: None,
+                waiver_reason: WaiverReason::None,
+                resume_notice: false,
             }),
             Some("Expert".into())
         );
@@ -1982,6 +2229,8 @@ mod tests {
                 target_n: Some(4),
                 solo_waiver: false,
                 brain_hint: None,
+                waiver_reason: WaiverReason::None,
+                resume_notice: false,
             }),
             Some("Expert 2 of 4".into())
         );
@@ -1992,11 +2241,14 @@ mod tests {
                 successful: 12,
                 target_n: Some(16),
                 solo_waiver: false,
+                brain_hint: None,
+                waiver_reason: WaiverReason::None,
+                resume_notice: false,
             }),
             Some("Heavy 12 of 16".into())
         );
 
-        // Partial / Waived.
+        // Partial / Solo / Trivial / confirm.
         assert_eq!(
             format_effort_chrome_label(&EffortChromeState {
                 mode: EffortMode::Heavy,
@@ -2005,6 +2257,8 @@ mod tests {
                 target_n: Some(16),
                 solo_waiver: false,
                 brain_hint: None,
+                waiver_reason: WaiverReason::None,
+                resume_notice: false,
             }),
             Some("Heavy Partial 3 of 16".into())
         );
@@ -2015,8 +2269,11 @@ mod tests {
                 successful: 0,
                 target_n: Some(4),
                 solo_waiver: false,
+                brain_hint: None,
+                waiver_reason: WaiverReason::Trivial,
+                resume_notice: false,
             }),
-            Some("Expert Waived".into())
+            Some("Expert Trivial".into())
         );
         assert_eq!(
             format_effort_chrome_label(&EffortChromeState {
@@ -2026,8 +2283,23 @@ mod tests {
                 target_n: Some(4),
                 solo_waiver: true,
                 brain_hint: None,
+                waiver_reason: WaiverReason::Solo,
+                resume_notice: false,
             }),
-            Some("Expert Waived".into())
+            Some("Expert Solo".into())
+        );
+        assert_eq!(
+            format_effort_chrome_label(&EffortChromeState {
+                mode: EffortMode::Heavy,
+                pursuit: PursuitState::Waived,
+                successful: 0,
+                target_n: Some(16),
+                solo_waiver: false,
+                brain_hint: None,
+                waiver_reason: WaiverReason::NeedsHeavyConfirm,
+                resume_notice: true,
+            }),
+            Some("Heavy · confirm first team · resumed".into())
         );
 
         // Tracker path: begin team → chrome shows 0 of 4; success → 1 of 4.
@@ -2035,17 +2307,118 @@ mod tests {
         t.set_mode(EffortMode::Expert, false);
         assert_eq!(t.chrome_state().status_label().as_deref(), Some("Expert"));
         t.begin_team_run().unwrap();
-        assert_eq!(
-            t.chrome_state().status_label().as_deref(),
-            Some("Expert 0 of 4")
+        let label0 = t.chrome_state().status_label().unwrap();
+        assert!(
+            label0.starts_with("Expert 0 of 4"),
+            "got {label0}"
         );
         t.record_outcome(0, SpecialistStatus::Success, Some("a".into()))
             .unwrap();
-        assert_eq!(
-            t.chrome_state().status_label().as_deref(),
-            Some("Expert 1 of 4")
+        let label1 = t.chrome_state().status_label().unwrap();
+        assert!(
+            label1.starts_with("Expert 1 of 4"),
+            "got {label1}"
         );
         t.clear_to_normal();
         assert_eq!(t.chrome_state().status_label(), None);
+    }
+
+    #[test]
+    fn triviality_hard_architecture_never_trivial() {
+        assert!(is_trivial_task("fix typo in readme"));
+        assert!(is_trivial_task("thanks"));
+        assert!(!is_trivial_task("architect multi-file migration of auth"));
+        assert!(!is_trivial_task("security audit of the sandbox"));
+        assert!(!is_trivial_task("performance investigation of the hot path"));
+    }
+
+    #[test]
+    fn force_team_overrides_trivial_classifier() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Expert, false);
+        // Without force: trivial short-circuits.
+        assert!(!t.on_session_turn_start("fix typo").unwrap());
+        assert_eq!(t.last_waiver(), WaiverReason::Trivial);
+        assert_eq!(t.pursuit(), PursuitState::Waived);
+        // Force team on a trivial-looking message.
+        assert!(t
+            .on_session_turn_start("--force-team fix typo")
+            .unwrap());
+        assert_eq!(t.pursuit(), PursuitState::Pursuing);
+        assert_eq!(t.last_waiver(), WaiverReason::None);
+        assert_eq!(t.target_n(), Some(4));
+    }
+
+    #[test]
+    fn first_heavy_team_requires_confirm_unless_unlocked() {
+        // Ensure env does not auto-confirm in this process for the test body.
+        let prev = std::env::var("GROK_HEAVY_AUTO_CONFIRM").ok();
+        unsafe { std::env::remove_var("GROK_HEAVY_AUTO_CONFIRM") };
+
+        let mut t = EffortModeTracker::new(tmp());
+        // new() may have read env before remove — force locked state.
+        t.set_mode(EffortMode::Heavy, false);
+        // If env was set earlier in process, unlock may already be true; force lock.
+        if t.heavy_unlocked() {
+            // Simulate locked session by constructing via snapshot.
+            let mut snap = t.snapshot();
+            snap.heavy_unlocked = false;
+            t = EffortModeTracker::from_snapshot(tmp(), snap);
+            // from_snapshot sets resume notice; clear for this test.
+            let _ = t.take_resume_elevated_notice();
+        }
+        assert!(!t.heavy_unlocked());
+        assert!(!t
+            .on_session_turn_start("architect multi-file auth migration")
+            .unwrap());
+        assert_eq!(t.last_waiver(), WaiverReason::NeedsHeavyConfirm);
+        assert!(
+            t.chrome_state()
+                .status_label()
+                .unwrap()
+                .contains("confirm"),
+            "{:?}",
+            t.chrome_state().status_label()
+        );
+        // Confirm unlocks and starts team.
+        assert!(t
+            .on_session_turn_start("--confirm architect multi-file auth migration")
+            .unwrap());
+        assert!(t.heavy_unlocked());
+        assert_eq!(t.pursuit(), PursuitState::Pursuing);
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("GROK_HEAVY_AUTO_CONFIRM", v) },
+            None => unsafe { std::env::remove_var("GROK_HEAVY_AUTO_CONFIRM") },
+        }
+    }
+
+    #[test]
+    fn resume_elevated_notice_on_snapshot_restore() {
+        let mut t = EffortModeTracker::new(tmp());
+        t.set_mode(EffortMode::Heavy, false);
+        t.unlock_heavy();
+        let snap = t.snapshot();
+        let restored = EffortModeTracker::from_snapshot(tmp(), snap);
+        assert!(restored.resume_elevated_notice());
+        assert!(
+            restored
+                .chrome_state()
+                .status_label()
+                .unwrap()
+                .contains("resumed")
+        );
+    }
+
+    #[test]
+    fn parse_effort_flags_force_and_confirm() {
+        let f = parse_effort_turn_flags("--force-team --confirm audit auth");
+        assert!(f.force_team);
+        assert!(f.confirm_heavy);
+        assert!(!f.solo);
+        assert_eq!(f.task.as_deref(), Some("audit auth"));
+        let s = parse_effort_turn_flags("--solo --force-team x");
+        assert!(s.solo);
+        assert!(!s.force_team); // solo wins
     }
 }

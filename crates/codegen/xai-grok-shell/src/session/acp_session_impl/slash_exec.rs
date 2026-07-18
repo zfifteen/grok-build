@@ -17,11 +17,20 @@ impl SessionActor {
             }
             // SetEffortMode with a task is intercepted in handle_prompt so the
             // turn continues into model inference under the sticky mode.
-            BuiltinAction::SetEffortMode { mode, task: None, solo } => {
-                self.apply_effort_mode(mode, solo);
+            BuiltinAction::SetEffortMode {
+                mode,
+                task: None,
+                solo,
+                force_team,
+                confirm_heavy,
+            } => {
+                self.apply_effort_mode(mode, solo, force_team, confirm_heavy);
                 ok_end_turn(0, None)
             }
-            BuiltinAction::SetEffortMode { task: Some(_), .. } => {
+            BuiltinAction::SetEffortMode {
+                task: Some(_),
+                ..
+            } => {
                 unreachable!("SetEffortMode with task is intercepted in handle_prompt")
             }
             BuiltinAction::SetYolo { enabled } => {

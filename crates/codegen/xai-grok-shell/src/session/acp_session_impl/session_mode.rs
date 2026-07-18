@@ -413,8 +413,31 @@ impl SessionActor {
                 self.emit_effort_chrome_update();
             }
             Ok(false) => {
-                // Solo/trivial/already-pursuing may still change Waived chrome.
+                let needs_heavy_confirm =
+                    tracker.last_waiver()
+                        == crate::session::effort_mode::WaiverReason::NeedsHeavyConfirm;
+                let resume = tracker.take_resume_elevated_notice();
+                let mode = tracker.mode();
                 drop(tracker);
+                if resume && mode.is_elevated() {
+                    self.push_system_reminder_with_tag(
+                        &format!(
+                            "Effort mode restored: sticky **{}** is still active from the previous session. \
+                             Use /normal to clear, /expert, or /heavy --solo for this turn.",
+                            mode.as_str()
+                        ),
+                        self.reminder_wrapper_tag(),
+                    );
+                }
+                if needs_heavy_confirm {
+                    self.push_system_reminder_with_tag(
+                        "Heavy mode is sticky but the **first multi-agent team** this session needs \
+                         an explicit confirm (cost guard). Reply with `--confirm` or \
+                         `/heavy --confirm <task>`, or use `--solo` / `/normal`. \
+                         Env `GROK_HEAVY_AUTO_CONFIRM=1` skips this gate.",
+                        self.reminder_wrapper_tag(),
+                    );
+                }
                 self.emit_effort_chrome_update();
             }
             Err(e) => {
@@ -765,6 +788,8 @@ impl SessionActor {
         &self,
         mode: crate::session::effort_mode::EffortMode,
         solo: bool,
+        force_team: bool,
+        confirm_heavy: bool,
     ) {
         let previous = self.effort_mode.lock().mode();
         {
@@ -775,15 +800,35 @@ impl SessionActor {
                 tracker.clear_to_normal();
             } else {
                 tracker.set_mode(mode, solo);
+                if confirm_heavy {
+                    tracker.unlock_heavy();
+                }
+                if force_team && !solo {
+                    tracker.set_force_team(true);
+                }
             }
         }
         self.persist_effort_mode_state();
         self.emit_effort_chrome_update();
+        // If Heavy was just set, surface first-team confirm guidance once.
+        if mode == crate::session::effort_mode::EffortMode::Heavy && !solo {
+            let unlocked = self.effort_mode.lock().heavy_unlocked();
+            if !unlocked {
+                self.push_system_reminder_with_tag(
+                    "Heavy is sticky. The **first multi-agent team** this session needs `--confirm` \
+                     (or `GROK_HEAVY_AUTO_CONFIRM=1`). Use `--solo` for single-leader turns, \
+                     `--force-team` after unlock to override trivial waiver.",
+                    self.reminder_wrapper_tag(),
+                );
+            }
+        }
         tracing::info!(
             session_id = %self.session_info.id.0,
             mode = mode.as_str(),
             previous = previous.as_str(),
             solo,
+            force_team,
+            confirm_heavy,
             "effort mode set",
         );
         tracing::info_span!(
