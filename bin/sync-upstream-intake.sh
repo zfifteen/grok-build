@@ -112,8 +112,46 @@ do_fetch() {
     return 0
   fi
   log "fetching $UPSTREAM_REMOTE $UPSTREAM_REF and $ORIGIN_REMOTE …"
-  git fetch "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+  # Force-update the remote-tracking ref so a stale/locked upstream/main
+  # cannot leave status/intake reading an old SHA after a successful network fetch.
+  if ! git fetch "$UPSTREAM_REMOTE" "+${UPSTREAM_REF}:refs/remotes/${UPSTREAM_REMOTE}/${UPSTREAM_REF}"; then
+    log "warn: forced tracking update failed; falling back to plain fetch"
+    git fetch "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+  fi
   git fetch "$ORIGIN_REMOTE" --prune
+}
+
+# Canonical CLI version lives in xai-grok-version (lockstepped with shell).
+version_line_from_file() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    rg -N --no-line-number '^version\s*=' "$path" | head -1 || true
+  fi
+}
+
+version_line_from_ref() {
+  local ref="$1"
+  local path="$2"
+  if git cat-file -e "${ref}:${path}" 2>/dev/null; then
+    git show "${ref}:${path}" | rg -N --no-line-number '^version\s*=' | head -1 || true
+  fi
+}
+
+report_cli_versions() {
+  local local_line up_line
+  local_line="$(version_line_from_file crates/codegen/xai-grok-version/Cargo.toml)"
+  if [[ -z "$local_line" ]]; then
+    local_line="$(version_line_from_file crates/codegen/xai-grok-shell/Cargo.toml)"
+  fi
+  up_line="$(version_line_from_ref "$UPSTREAM_REMOTE/$UPSTREAM_REF" crates/codegen/xai-grok-version/Cargo.toml)"
+  if [[ -z "$up_line" ]]; then
+    up_line="$(version_line_from_ref "$UPSTREAM_REMOTE/$UPSTREAM_REF" crates/codegen/xai-grok-shell/Cargo.toml)"
+  fi
+  if [[ -n "$local_line" || -n "$up_line" ]]; then
+    log ""
+    log "local CLI version (xai-grok-version):    ${local_line:-missing}"
+    log "upstream CLI version (xai-grok-version): ${up_line:-missing}"
+  fi
 }
 
 short() {
@@ -177,16 +215,15 @@ cmd_status() {
     fi
   fi
 
-  if [[ -f crates/codegen/xai-grok-shell/Cargo.toml ]]; then
-    log ""
-    log "local shell version: $(rg -N --no-line-number '^version\s*=' crates/codegen/xai-grok-shell/Cargo.toml | head -1 || true)"
-  fi
-  if git cat-file -e "$UPSTREAM_REMOTE/$UPSTREAM_REF:crates/codegen/xai-grok-shell/Cargo.toml" 2>/dev/null; then
-    log "upstream shell version: $(git show "$UPSTREAM_REMOTE/$UPSTREAM_REF:crates/codegen/xai-grok-shell/Cargo.toml" | rg -N --no-line-number '^version\s*=' | head -1 || true)"
-  fi
+  report_cli_versions
 
   log ""
   log "working tree: $(if [[ -z "$(git status --porcelain)" ]]; then echo clean; else echo DIRTY; fi)"
+  log ""
+  log "operator shortcuts:"
+  log "  update fork main only:  ./bin/update-from-xai.sh --apply"
+  log "  main + merge powergrok: ./bin/update-from-xai.sh --full --apply"
+  log "  status only:            ./bin/update-from-xai.sh"
 }
 
 cmd_backup() {
@@ -266,6 +303,13 @@ cmd_intake_main() {
     git push "$ORIGIN_REMOTE" "$INTAKE_BRANCH"
   fi
   log "main now $(short "$INTAKE_BRANCH") == upstream/main"
+  report_cli_versions
+  if git merge-base --is-ancestor "$INTAKE_BRANCH" "$PRODUCT_BRANCH" 2>/dev/null; then
+    log "product branch $PRODUCT_BRANCH already contains this main tip."
+  else
+    log "next (optional): fold main into product → ./bin/update-from-xai.sh --merge-product --apply"
+    log "  or: ./bin/sync-upstream-intake.sh merge-powergrok --apply"
+  fi
   if [[ -n "$current" && "$current" != "$INTAKE_BRANCH" ]]; then
     git checkout "$current" || true
   fi

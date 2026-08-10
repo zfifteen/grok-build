@@ -2,8 +2,21 @@
 
 This is the **operator/agent runbook** for integrating [xai-org/grok-build](https://github.com/xai-org/grok-build) into this fork without losing `powergrok` product commits (branding, Expert/Heavy/brains, README, docs).
 
-Canonical branch rules live in repo-root [`AGENTS.md`](../../AGENTS.md).  
-Automation entrypoint: [`bin/sync-upstream-intake.sh`](../../bin/sync-upstream-intake.sh).
+Canonical branch rules live in repo-root [`AGENTS.md`](../../AGENTS.md).
+
+| Script | Role |
+|--------|------|
+| [`bin/update-from-xai.sh`](../../bin/update-from-xai.sh) | **Operator shortcut.** Default path updates fork `main` from xAI. |
+| [`bin/sync-upstream-intake.sh`](../../bin/sync-upstream-intake.sh) | Full engine (status, backup, intake-main, merge-powergrok, verify). |
+
+Self-serve (clean working tree):
+
+```sh
+./bin/update-from-xai.sh              # status + lag (safe anytime)
+./bin/update-from-xai.sh --apply      # align main to xAI + push origin/main
+./bin/update-from-xai.sh --full --apply   # also merge main → powergrok
+git push origin powergrok             # after a clean product merge
+```
 
 ---
 
