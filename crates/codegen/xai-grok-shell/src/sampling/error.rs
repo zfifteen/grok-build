@@ -106,12 +106,25 @@ fn pushes_consumer_subscription_upsell(detail: &str) -> bool {
     d.contains("grok.com/supergrok") || d.contains("upgrade to a grok subscription")
 }
 
+/// User-facing copy for capacity/overload failures (stream `overloaded_error`,
+/// HTTP 529, proxy-wrapped 5xx). See [`SamplingError::is_overloaded`].
+pub const OVERLOADED_USER_MESSAGE: &str = "Model is temporarily overloaded. Try again in a moment.";
+
 /// Map a `SamplingError` to an ACP `Error` for client-facing responses.
 /// This stays in xai-grok-shell because it depends on `agent_client_protocol::Error`.
-pub fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
+pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
     use reqwest::StatusCode;
+    // Capacity/overload gets the same short copy on every surface. Message
+    // only, `data` deliberately unset: `Display` appends JSON-encoded `data`,
+    // and this string is meant for direct display.
+    if err.is_overloaded() {
+        return acp::Error::new(
+            acp::ErrorCode::InternalError.into(),
+            OVERLOADED_USER_MESSAGE,
+        );
+    }
     match err {
-        SamplingError::Auth(msg) => acp::Error::auth_required().data(msg),
+        SamplingError::Auth { message, .. } => acp::Error::auth_required().data(message),
         SamplingError::InvalidConfiguration(msg) => acp::Error::invalid_params().data(msg),
         SamplingError::Http(e) => {
             acp::Error::internal_error().data(format!("http client init failed: {e}"))
@@ -139,6 +152,8 @@ pub fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
                 } else {
                     message
                 };
+                // 403 is content-safety, never auth: on this setup path it stays
+                // `internal_error` → `server_error`.
                 acp::Error::internal_error().data(message)
             }
             StatusCode::BAD_REQUEST => acp::Error::invalid_params().data(message),
@@ -147,7 +162,10 @@ pub fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
             StatusCode::TOO_MANY_REQUESTS => {
                 acp::Error::new(RATE_LIMITED_ERROR_CODE, "Rate limited".to_string()).data(message)
             }
-            _ => acp::Error::internal_error().data(message),
+            // Preserve the HTTP status in data so the classifier folds capacity
+            // errors (503/529) into `rate_limit`.
+            _ => acp::Error::internal_error()
+                .data(error_data_with_status(message, Some(status.as_u16()))),
         },
         SamplingError::EventStreamError(message) => acp::Error::internal_error().data(message),
         SamplingError::StreamError {
@@ -179,7 +197,10 @@ pub fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
     }
 }
 
-pub fn error_data_with_status(message: String, http_status: Option<u16>) -> serde_json::Value {
+pub(crate) fn error_data_with_status(
+    message: String,
+    http_status: Option<u16>,
+) -> serde_json::Value {
     match http_status {
         Some(sc) => serde_json::json!({ "message": message, "http_status": sc }),
         None => serde_json::Value::String(message),
@@ -187,7 +208,7 @@ pub fn error_data_with_status(message: String, http_status: Option<u16>) -> serd
 }
 
 /// Terminal-failure `acp::Error.data`: max-tokens truncation carries an `error_kind` marker (the kind's stable `as_str` name); other kinds keep the legacy shape.
-pub fn terminal_error_data(
+pub(crate) fn terminal_error_data(
     message: String,
     http_status: Option<u16>,
     kind: xai_grok_sampler::SamplingErrorKind,
@@ -289,7 +310,7 @@ pub fn prompt_usage_from_error(
 /// notification from a prompt result. Rate-limit errors produce
 /// `("rate_limit", null)` so the client shows its own upgrade message;
 /// other errors produce `("error", <detail>)`.
-pub fn prompt_complete_fields(
+pub(crate) fn prompt_complete_fields(
     result: &std::result::Result<acp::StopReason, acp::Error>,
 ) -> (serde_json::Value, serde_json::Value) {
     match result {
@@ -326,6 +347,7 @@ mod tests {
                 total_tokens: 4,
                 reasoning_tokens: 0,
                 cached_prompt_tokens: 0,
+                cache_creation_prompt_tokens: 0,
             },
             None,
             Some(10),
@@ -494,6 +516,31 @@ mod tests {
     }
 
     #[test]
+    fn overload_maps_to_display_message_without_data() {
+        let err = SamplingError::StreamError {
+            error_type: "overloaded_error".into(),
+            message: "Overloaded".into(),
+        };
+        let acp_err = map_sampling_err_to_acp(err);
+        assert_eq!(acp_err.code, acp::ErrorCode::InternalError);
+        assert_eq!(acp_err.message, OVERLOADED_USER_MESSAGE);
+        // Display appends JSON-encoded `data`; direct-display copy must not
+        // carry any.
+        assert_eq!(acp_err.data, None);
+
+        let err_529 = SamplingError::Api {
+            status: StatusCode::from_u16(529).expect("valid status"),
+            message: "capacity".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        };
+        let acp_529 = map_sampling_err_to_acp(err_529);
+        assert_eq!(acp_529.message, OVERLOADED_USER_MESSAGE);
+        assert_eq!(acp_529.data, None);
+    }
+
+    #[test]
     fn rate_limit_error_uses_dedicated_code() {
         let err = SamplingError::Api {
             status: StatusCode::TOO_MANY_REQUESTS,
@@ -548,6 +595,20 @@ mod tests {
         assert_eq!(rate_acp.code, acp::ErrorCode::from(RATE_LIMITED_ERROR_CODE));
         assert_ne!(rate_acp.code, server_acp.code);
         assert_eq!(server_acp.code, acp::Error::internal_error().code);
+    }
+
+    #[test]
+    fn service_unavailable_retains_http_status_for_classification() {
+        let err = SamplingError::Api {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "at capacity".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+        };
+        let acp_err = map_sampling_err_to_acp(err);
+        assert_eq!(acp_err.code, acp::Error::internal_error().code);
+        assert_eq!(http_status_from_error(&acp_err), Some(503));
     }
 
     #[test]

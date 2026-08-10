@@ -4,8 +4,9 @@
 //! goes through the same `SubagentEvent` channel as goal planner/classifier
 //! harness spawns — **not** the model tool path.
 
+use xai_grok_tools::implementations::grok_build::task::backend::{ChannelBackend, SubagentBackend};
 use xai_grok_tools::implementations::grok_build::task::types::{
-    SubagentEvent, SubagentRequest, SubagentResult, SubagentRuntimeOverrides,
+    SubagentEvent, SubagentOwner, SubagentRequest, SubagentResult, SubagentRuntimeOverrides,
 };
 use xai_tool_types::SubagentCapabilityMode;
 
@@ -36,7 +37,6 @@ pub async fn spawn_specialist(
     task_id: String,
     brief: SpecialistBrief,
 ) -> SpecialistJoinResult {
-    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     let request = SubagentRequest {
         id: task_id.clone(),
         prompt: brief.prompt.clone(),
@@ -54,32 +54,23 @@ pub async fn spawn_specialist(
                 xai_grok_tools::implementations::grok_build::task::types::ModelOverrideProvenance::Harness,
             ..Default::default()
         },
-        // Await via oneshot; still surfaces in TUI via spawn notifications.
         run_in_background: false,
         surface_completion: true,
+        // Block until the specialist finishes (no short foreground budget).
+        await_to_completion: true,
         fork_context: false,
-        result_tx,
+        owner: SubagentOwner::Task,
+        cancel_token: tokio_util::sync::CancellationToken::new(),
     };
-    if event_tx
-        .send(SubagentEvent::Spawn(Box::new(request)))
-        .is_err()
-    {
-        return SpecialistJoinResult {
-            brief,
-            task_id,
-            success: false,
-            cancelled: false,
-            body: "effort team: subagent coordinator channel closed".to_string(),
-        };
-    }
-    match result_rx.await {
+    let backend = ChannelBackend::new(event_tx.clone());
+    match backend.spawn_with_foreground_wait(request, None).await {
         Ok(result) => join_from_result(brief, task_id, result),
-        Err(_) => SpecialistJoinResult {
+        Err(err) => SpecialistJoinResult {
             brief,
             task_id,
             success: false,
             cancelled: false,
-            body: "effort team: subagent result channel dropped".to_string(),
+            body: format!("effort team: subagent spawn failed: {err}"),
         },
     }
 }
