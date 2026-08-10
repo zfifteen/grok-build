@@ -12,7 +12,8 @@ actually sticks with them.
 [Brains](#reasoning-brains) ·
 [Try it](#try-it-in-a-session) ·
 [Install](#install-side-by-side) ·
-[Reference](#reference)
+[Reference](#reference) ·
+[Update from xAI](#update-from-xai)
 
 **Command:** `powergrok` ·
 **Trunk:** [`powergrok`](https://github.com/zfifteen/powergrok/tree/powergrok) ·
@@ -314,6 +315,44 @@ cargo fmt --all
 | **`feat/*`** | Feature work; open PRs **into `powergrok`** |
 
 Details: [`AGENTS.md`](AGENTS.md).
+
+### Update from xAI
+
+Pull new monorepo syncs from [xai-org/grok-build](https://github.com/xai-org/grok-build) into this fork with the operator scripts. Work from a **clean** tree (`git status` empty).
+
+| Goal | Command |
+|------|---------|
+| See lag vs upstream | `./bin/update-from-xai.sh` |
+| Align fork **`main`** to xAI `main` and push `origin/main` | `./bin/update-from-xai.sh --apply` |
+| Same, then merge **`main` → `powergrok`** | `./bin/update-from-xai.sh --full --apply` |
+| Product merge only (main already current) | `./bin/update-from-xai.sh --merge-product --apply` |
+
+After a clean product merge, publish the trunk:
+
+```sh
+git push origin powergrok
+```
+
+If the product merge stops on conflicts:
+
+```sh
+# fix files, then:
+git add -A && git merge --continue
+git push origin powergrok
+# or abort:
+# git merge --abort
+```
+
+**Root republish** (no shared merge-base with upstream, rare): force-update intake `main` only with explicit approval:
+
+```sh
+./bin/update-from-xai.sh --apply --i-approve-force-main
+./bin/update-from-xai.sh --merge-product --apply   # may need --allow-unrelated
+git push origin powergrok
+```
+
+Full runbook, safety rules, and recovery: [`docs/powergrok/UPSTREAM_INTAKE.md`](docs/powergrok/UPSTREAM_INTAKE.md).  
+Engine script: [`bin/sync-upstream-intake.sh`](bin/sync-upstream-intake.sh) (status, backup, intake-main, merge-powergrok, verify).
 
 ### Power-user knobs (optional)
 
