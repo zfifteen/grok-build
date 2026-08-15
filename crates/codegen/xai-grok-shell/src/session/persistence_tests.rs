@@ -56,6 +56,7 @@ fn test_actor_inner(
             summary,
             registry_title_sync: None,
             gateway: None,
+            search_index: crate::session::storage::search::SharedSearchIndex::never_indexed(),
             disk_full_tx,
             disk_full_notified: false,
         }
@@ -1265,4 +1266,51 @@ async fn successful_probe_writable_clears_disk_full_latch() {
     assert!(probe_writable(&actor.handle).await.is_ok());
     assert!(!actor.handle.is_disk_full());
     actor.stop().await;
+}
+
+#[cfg(unix)]
+mod prompt_file_tests {
+    use super::*;
+    use crate::test_support::unix_mode;
+
+    #[test]
+    fn prompt_file_dir_chain_is_owner_only() {
+        let home = tempfile::TempDir::new().unwrap();
+        let info = Info {
+            id: agent_client_protocol::SessionId::new("prompt-perm-test"),
+            cwd: "/some/project".to_string(),
+        };
+
+        let path = get_prompt_file_path_in(home.path(), &info, 0);
+
+        // The chain below prompts/ is ensure_owner_only_session_dir_in's job,
+        // pinned by ensure_owner_only_session_dir_tightens_chain — only the
+        // prompts/ level is this path's own creation.
+        let prompts_dir = path.parent().unwrap();
+        assert_eq!(unix_mode(prompts_dir), 0o700, "prompts dir must be 0700");
+    }
+
+    /// The chat-kind (noop-persistence) writers' dir creator.
+    #[test]
+    fn ensure_owner_only_session_dir_tightens_chain() {
+        let home = tempfile::TempDir::new().unwrap();
+        let info = Info {
+            id: agent_client_protocol::SessionId::new("chat-kind-perm-test"),
+            cwd: "/some/project".to_string(),
+        };
+
+        let dir = ensure_owner_only_session_dir_in(home.path(), &info).unwrap();
+
+        assert_eq!(unix_mode(&dir), 0o700, "session dir must be 0700");
+        assert_eq!(
+            unix_mode(dir.parent().unwrap()),
+            0o700,
+            "<encoded-cwd> dir must be 0700"
+        );
+        assert_eq!(
+            unix_mode(&home.path().join("sessions")),
+            0o700,
+            "sessions root must be 0700"
+        );
+    }
 }

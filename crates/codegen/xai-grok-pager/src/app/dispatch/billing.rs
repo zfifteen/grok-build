@@ -292,10 +292,17 @@ fn open_supergrok_upsell(
         auth_method,
     });
 
+    // /supergrok lists all plans; every upgrade option lands there.
     let options = vec![
         QuestionOption {
             label: "Upgrade to SuperGrok".into(),
             description: "For everyday coding and productivity tasks".into(),
+            preview: None,
+            id: Some(UPSELL_URL_UPGRADE.into()),
+        },
+        QuestionOption {
+            label: "Upgrade to SuperGrok Plus".into(),
+            description: "Significantly higher usage and rate limits".into(),
             preview: None,
             id: Some(UPSELL_URL_UPGRADE.into()),
         },
@@ -306,8 +313,6 @@ fn open_supergrok_upsell(
                 xai_grok_config::product_name()
             ),
             preview: None,
-            // No Heavy-specific URL exists; the /supergrok page lists
-            // both plans, so both upgrade options land there.
             id: Some(UPSELL_URL_UPGRADE.into()),
         },
     ];
